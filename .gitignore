@@ -3,3 +3,5 @@
 *.png
 *.json
 *.zip
+*__pycache__/
+*.venv
