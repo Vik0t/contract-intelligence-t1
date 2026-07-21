@@ -1,5 +1,7 @@
+from src.parsing import parse_file
+
 def main():
-    print("Hello from contract-intelligence-t1!")
+    print(parse_file("dataset/Договор_001.docx"))
 
 
 if __name__ == "__main__":
