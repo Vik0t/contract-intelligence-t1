@@ -46,11 +46,11 @@ def extract_contract_key_data(text):
               "content": text
             }
             ],
-            "reasoning": {"enabled": True}
+            "reasoning": {"enabled": False}
         })
     )
     response = response.json()
-    ##print("СТРУКТУРА ОТВЕТА:", response)
+    print("СТРУКТУРА ОТВЕТА:", response)
     response = response['choices'][0]['message']['content']
     try:
         contract_data = json.loads(response)
