@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate>=1.0.0",
     "gdown>=6.1.0",
     "ocrmypdf>=17.8.1",
     "pdf2image>=1.17.0",
@@ -14,4 +15,17 @@ dependencies = [
     "python-docx>=1.2.0",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
+    "torch>=2.13.0",
+    "torchaudio>=2.11.0",
+    "torchvision>=0.28.0",
+    "transformers>=5.0.0",
 ]
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130" }]
+torchvision = [{ index = "pytorch-cu130" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
