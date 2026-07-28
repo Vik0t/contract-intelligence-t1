@@ -3,10 +3,19 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 import tempfile
 import os
-from ..src.parsing import parse_file
-from ..src.llm import extract_contract_key_data
+from src.parsing import parse_file
+from src.llm import extract_contract_key_data
+# app.py
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Vite default port
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.post("/upload-contract")
 async def upload_contract(file: UploadFile = File(...)):
