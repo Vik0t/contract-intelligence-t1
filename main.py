@@ -9,7 +9,7 @@ if platform.system() != "Darwin":
 
 from src.local_extraction import extract_contract_key_data
 
-from src.evaluate import evaluate_llm
+#from src.evaluate import evaluate_llm
 
 def main() -> None:
     parser = argparse.ArgumentParser(

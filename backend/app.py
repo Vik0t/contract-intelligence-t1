@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 #import database
-import api_requests
+import backend.api_requests as api_requests
 
 app = FastAPI(
     title="T1 Contract Intelligence",
