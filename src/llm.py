@@ -1,6 +1,8 @@
 import requests
 import json
+from dotenv import load_dotenv
 import os
+load_dotenv()
 api_key = os.getenv("OPENROUTER_API_KEY")
 
 system_prompt = """You are a helpful assistant that extracts key data from contracts. 
