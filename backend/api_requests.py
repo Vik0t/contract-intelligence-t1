@@ -1,5 +1,5 @@
 from re import fullmatch, match
-from fastapi import HTTPException, Header
+from fastapi import File, Form, HTTPException, Header, UploadFile
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -341,14 +341,22 @@ class DocumentUploadRequest(BaseModel):
         ...,
         description="Authentication token in Authorization header"
     )
-    filename: str = Field(
-        ...,
-        description="Name of the file being uploaded"
-    )
     template_id: int = Field(
         ...,
         description="ID of the template to use for extraction"
     )
+    
+    @classmethod
+    def as_form(
+        cls,
+        file: UploadFile = File(...),
+        template_id: int = Form(...),
+        authorization: str = Header(...)
+    ):
+        return cls(
+            template_id=template_id,
+            token=TokenHeader(authorization=authorization)
+        )
 
 class DocumentUploadResponse(BaseModel):
     """
@@ -370,6 +378,10 @@ class DocumentUploadResponse(BaseModel):
         None,
         description="Uploaded document information"
     )
+    parsing_time_seconds: Optional[float] = Field(
+        None,
+        description="Time taken to parse the document in seconds"
+    )
 
 class DocumentResponse(BaseModel):
     """
@@ -390,10 +402,6 @@ class DocumentResponse(BaseModel):
     template_id: int = Field(
         ...,
         description="Template ID used for extraction"
-    )
-    path: str = Field(
-        ...,
-        description="File path in storage"
     )
     created_at: datetime = Field(
         ...,
@@ -724,17 +732,25 @@ class StatsResponse(BaseModel):
         ...,
         description="Total number of registered users"
     )
-    total_extractions: int = Field(
+    total_parsed_documents: int = Field(
         ...,
-        description="Total number of extractions performed"
+        description="Total number of parsed documents"
     )
-    average_processing_time: float = Field(
+    total_metadata_extractions: int = Field(
         ...,
-        description="Average document processing time in seconds"
+        description="Total number of metadata extractions performed"
     )
-    total_api_calls: int = Field(
+    total_tokens_used: int = Field(
         ...,
-        description="Total number of API calls"
+        description="Total tokens used across all documents"
+    )
+    average_parsing_time: float = Field(
+        ...,
+        description="Average document parsing time in seconds"
+    )
+    average_extraction_time: float = Field(
+        ...,
+        description="Average metadata extraction time in seconds"
     )
     period_start: datetime = Field(
         ...,
@@ -743,4 +759,8 @@ class StatsResponse(BaseModel):
     period_end: datetime = Field(
         ...,
         description="End of statistics period"
+    )
+    documents_per_day: Dict[str, int] = Field(
+        ...,
+        description="Number of documents processed per day"
     )

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint
+from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import secrets
 
 Base = declarative_base()
+
+# ============ MODELS ============
 
 class User(Base):
     __tablename__ = 'users'
@@ -30,10 +32,12 @@ class Session(Base):
 
     @staticmethod
     def generate_token():
+        """Generate a secure random session token."""
         return secrets.token_urlsafe(32)
 
     @staticmethod
     def create_expiry(days=7):
+        """Create expiration datetime for session."""
         return datetime.now() + timedelta(days=days)
 
 class Template(Base):
@@ -49,43 +53,65 @@ class Document(Base):
     owner = Column(Integer, ForeignKey('users.id'))
     filename = Column(String(255))
     template_id = Column(Integer, ForeignKey('templates.id'), nullable=False)
-    path = Column(String(500), nullable=False)
+    contract_family = Column(String(255), nullable=True)
+    is_scan = Column(Boolean, default=False)
+    has_tables = Column(Boolean, default=False)
+    language = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=func.now())
     metadata = relationship('DocumentMetadata', backref='document', uselist=False)
+    parsed_text = relationship('ParsedDocument', backref='document', uselist=False)
 
 class DocumentMetadata(Base):
     __tablename__ = 'document_metadata'
     id = Column(Integer, primary_key=True)
-    document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), unique=True)
+    document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), unique=True, nullable=False)
     fields = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=func.now())
 
-class TokenUsage(Base):
-    __tablename__ = 'token_usage'
+class Stats(Base):
+    __tablename__ = 'stats'
     id = Column(Integer, primary_key=True)
     document_id = Column(Integer, ForeignKey('documents.id', ondelete='SET NULL'))
     prompt_tokens = Column(Integer)
     completion_tokens = Column(Integer)
     total_tokens = Column(Integer)
+    parsing_time = Column(Float, nullable=True)
+    extracting_time = Column(Float, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
+class ParsedDocument(Base):
+    __tablename__ = 'parsed_documents'
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), unique=True, nullable=False)
+    text = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
+# ============ ENGINE & SESSION ============
+
 def get_engine(db_path='sqlite:///documents.db'):
+    """Create and return SQLAlchemy engine."""
     return create_engine(db_path, echo=False)
 
 def create_tables(engine):
+    """Create all database tables."""
     Base.metadata.create_all(engine)
 
 def get_session(engine):
+    """Create and return a new database session."""
     Session = sessionmaker(bind=engine)
     return Session()
 
+# ============ USER OPERATIONS ============
+
 def create_user(session, username, email, password_hash, role='user'):
+    """Create a new user."""
     user = User(username=username, email=email, password_hash=password_hash, role=role)
     session.add(user)
     session.commit()
     return user
 
 def get_user(session, user_id=None, username=None, email=None):
+    """Get a user by ID, username, or email."""
     query = session.query(User)
     if user_id:
         return query.filter(User.id == user_id).first()
@@ -96,9 +122,11 @@ def get_user(session, user_id=None, username=None, email=None):
     return None
 
 def get_all_users(session):
+    """Get all users."""
     return session.query(User).all()
 
 def update_user(session, user_id, **kwargs):
+    """Update user fields."""
     user = get_user(session, user_id=user_id)
     if user:
         for key, value in kwargs.items():
@@ -108,13 +136,17 @@ def update_user(session, user_id, **kwargs):
     return user
 
 def delete_user(session, user_id):
+    """Delete a user."""
     user = get_user(session, user_id=user_id)
     if user:
         session.delete(user)
         session.commit()
     return user
 
+# ============ SESSION OPERATIONS ============
+
 def create_session(session, user_id, days=7):
+    """Create a new session for a user."""
     sess = Session(
         user_id=user_id,
         session_token=Session.generate_token(),
@@ -125,19 +157,31 @@ def create_session(session, user_id, days=7):
     return sess
 
 def get_session_by_token(session, token):
+    """Get a valid session by token."""
     return session.query(Session).filter(
         Session.session_token == token,
         Session.expires_at > datetime.now()
     ).first()
-    
+
+def delete_session_by_token(session, token):
+    """Delete a session by token."""
+    sess = session.query(Session).filter(Session.session_token == token).first()
+    if sess:
+        session.delete(sess)
+        session.commit()
+    return sess
+
+# ============ TEMPLATE OPERATIONS ============
 
 def create_template(session, name, fields):
+    """Create a new template."""
     template = Template(name=name, fields=fields)
     session.add(template)
     session.commit()
     return template
 
 def get_template(session, template_id=None, name=None):
+    """Get a template by ID or name."""
     query = session.query(Template)
     if template_id:
         return query.filter(Template.id == template_id).first()
@@ -146,9 +190,11 @@ def get_template(session, template_id=None, name=None):
     return None
 
 def get_all_templates(session):
+    """Get all templates."""
     return session.query(Template).all()
 
 def update_template(session, template_id, **kwargs):
+    """Update template fields."""
     template = get_template(session, template_id=template_id)
     if template:
         for key, value in kwargs.items():
@@ -158,31 +204,70 @@ def update_template(session, template_id, **kwargs):
     return template
 
 def delete_template(session, template_id):
+    """Delete a template."""
     template = get_template(session, template_id=template_id)
     if template:
         session.delete(template)
         session.commit()
     return template
 
-def create_document(session, owner, template_id, path, filename=None):
-    doc = Document(owner=owner, template_id=template_id, path=path, filename=filename)
+# ============ DOCUMENT OPERATIONS ============
+
+def create_document(session, owner, template_id, filename=None, contract_family=None, 
+                    is_scan=False, has_tables=False, language=None):
+    """Create a new document."""
+    doc = Document(
+        owner=owner, 
+        template_id=template_id, 
+        filename=filename,
+        contract_family=contract_family,
+        is_scan=is_scan,
+        has_tables=has_tables,
+        language=language
+    )
     session.add(doc)
     session.commit()
     return doc
 
 def get_document(session, document_id):
+    """Get a document by ID."""
     return session.query(Document).filter(Document.id == document_id).first()
 
 def get_documents_by_owner(session, owner_id):
+    """Get all documents for a specific owner."""
     return session.query(Document).filter(Document.owner == owner_id).all()
 
+def get_documents_by_owner_paginated(session, owner_id, page=1, limit=50):
+    """Get paginated documents for a specific owner."""
+    offset = (page - 1) * limit
+    total = session.query(Document).filter(Document.owner == owner_id).count()
+    documents = session.query(Document).filter(Document.owner == owner_id).order_by(Document.created_at.desc()).offset(offset).limit(limit).all()
+    return documents, total
+
 def get_documents_by_template(session, template_id):
+    """Get all documents using a specific template."""
     return session.query(Document).filter(Document.template_id == template_id).all()
 
 def get_all_documents(session):
+    """Get all documents."""
     return session.query(Document).all()
 
+def get_documents_by_period(session, start_date, end_date):
+    """Get documents created within a specific time period."""
+    return session.query(Document).filter(
+        Document.created_at >= start_date,
+        Document.created_at <= end_date
+    ).all()
+
+def get_documents_with_metadata(session, owner_id=None):
+    """Get documents with their metadata, optionally filtered by owner."""
+    query = session.query(Document).join(DocumentMetadata)
+    if owner_id:
+        query = query.filter(Document.owner == owner_id)
+    return query.all()
+
 def update_document(session, document_id, **kwargs):
+    """Update document fields."""
     doc = get_document(session, document_id)
     if doc:
         for key, value in kwargs.items():
@@ -192,22 +277,35 @@ def update_document(session, document_id, **kwargs):
     return doc
 
 def delete_document(session, document_id):
+    """Delete a document."""
     doc = get_document(session, document_id)
     if doc:
         session.delete(doc)
         session.commit()
     return doc
 
+# ============ METADATA OPERATIONS ============
+
 def create_metadata(session, document_id, fields):
+    """Create document metadata."""
     metadata = DocumentMetadata(document_id=document_id, fields=fields)
     session.add(metadata)
     session.commit()
     return metadata
 
 def get_metadata(session, document_id):
+    """Get document metadata."""
     return session.query(DocumentMetadata).filter(DocumentMetadata.document_id == document_id).first()
 
+def get_metadata_by_period(session, start_date, end_date):
+    """Get metadata created within a specific time period."""
+    return session.query(DocumentMetadata).filter(
+        DocumentMetadata.created_at >= start_date,
+        DocumentMetadata.created_at <= end_date
+    ).all()
+
 def update_metadata(session, document_id, fields):
+    """Update or create document metadata."""
     metadata = get_metadata(session, document_id)
     if metadata:
         metadata.fields = fields
@@ -217,36 +315,118 @@ def update_metadata(session, document_id, fields):
     return metadata
 
 def delete_metadata(session, document_id):
+    """Delete document metadata."""
     metadata = get_metadata(session, document_id)
     if metadata:
         session.delete(metadata)
         session.commit()
     return metadata
 
-def create_token_usage(session, document_id, prompt_tokens, completion_tokens, total_tokens):
-    usage = TokenUsage(
+# ============ STATS OPERATIONS ============
+
+def create_stats(session, document_id, prompt_tokens, completion_tokens, total_tokens, 
+                 parsing_time=None, extracting_time=None):
+    """Create stats record for a document."""
+    stats = Stats(
         document_id=document_id,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
-        total_tokens=total_tokens
+        total_tokens=total_tokens,
+        parsing_time=parsing_time,
+        extracting_time=extracting_time
     )
-    session.add(usage)
+    session.add(stats)
     session.commit()
-    return usage
+    return stats
 
-def get_token_usage(session, usage_id=None, document_id=None):
-    query = session.query(TokenUsage)
-    if usage_id:
-        return query.filter(TokenUsage.id == usage_id).first()
+def get_stats(session, stats_id=None, document_id=None):
+    """Get stats by ID or document ID."""
+    query = session.query(Stats)
+    if stats_id:
+        return query.filter(Stats.id == stats_id).first()
     if document_id:
-        return query.filter(TokenUsage.document_id == document_id).all()
+        return query.filter(Stats.document_id == document_id).all()
     return None
 
-def get_all_token_usage(session):
-    return session.query(TokenUsage).all()
+def get_all_stats(session):
+    """Get all stats records."""
+    return session.query(Stats).all()
 
-def get_documents_with_metadata(session, owner_id=None):
-    query = session.query(Document).join(DocumentMetadata)
-    if owner_id:
-        query = query.filter(Document.owner == owner_id)
-    return query.all()
+def get_stats_by_period(session, start_date, end_date):
+    """Get stats within a specific time period."""
+    return session.query(Stats).filter(
+        Stats.created_at >= start_date,
+        Stats.created_at <= end_date
+    ).all()
+
+def update_stats(session, stats_id, **kwargs):
+    """Update stats fields."""
+    stats = session.query(Stats).filter(Stats.id == stats_id).first()
+    if stats:
+        for key, value in kwargs.items():
+            if hasattr(stats, key):
+                setattr(stats, key, value)
+        session.commit()
+    return stats
+
+def delete_stats(session, stats_id):
+    """Delete stats record."""
+    stats = session.query(Stats).filter(Stats.id == stats_id).first()
+    if stats:
+        session.delete(stats)
+        session.commit()
+    return stats
+
+# ============ PARSED DOCUMENT OPERATIONS ============
+
+def create_parsed_document(session, document_id, text):
+    """Create parsed document text."""
+    parsed = ParsedDocument(document_id=document_id, text=text)
+    session.add(parsed)
+    session.commit()
+    return parsed
+
+def get_parsed_document(session, document_id):
+    """Get parsed document by document ID."""
+    return session.query(ParsedDocument).filter(ParsedDocument.document_id == document_id).first()
+
+def get_parsed_document_by_id(session, parsed_id):
+    """Get parsed document by ID."""
+    return session.query(ParsedDocument).filter(ParsedDocument.id == parsed_id).first()
+
+def get_all_parsed_documents(session):
+    """Get all parsed documents."""
+    return session.query(ParsedDocument).all()
+
+def get_parsed_documents_by_period(session, start_date, end_date):
+    """Get parsed documents created within a specific time period."""
+    return session.query(ParsedDocument).filter(
+        ParsedDocument.created_at >= start_date,
+        ParsedDocument.created_at <= end_date
+    ).all()
+
+def update_parsed_document(session, document_id, text):
+    """Update parsed document text."""
+    parsed = get_parsed_document(session, document_id)
+    if parsed:
+        parsed.text = text
+        session.commit()
+    else:
+        parsed = create_parsed_document(session, document_id, text)
+    return parsed
+
+def delete_parsed_document(session, document_id):
+    """Delete parsed document by document ID."""
+    parsed = get_parsed_document(session, document_id)
+    if parsed:
+        session.delete(parsed)
+        session.commit()
+    return parsed
+
+def delete_parsed_document_by_id(session, parsed_id):
+    """Delete parsed document by ID."""
+    parsed = get_parsed_document_by_id(session, parsed_id)
+    if parsed:
+        session.delete(parsed)
+        session.commit()
+    return parsed

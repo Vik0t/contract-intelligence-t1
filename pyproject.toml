@@ -8,6 +8,7 @@ requires-python = ">=3.12,<3.13"
 
 dependencies = [
     "accelerate>=1.0,<2",
+    "bcrypt>=5.0.0",
     "fastapi[standard]>=0.140.13",
     "gdown>=6.1.0",
     "ocrmypdf>=17.8.1",
