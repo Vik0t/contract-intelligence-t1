@@ -1,31 +1,54 @@
 [project]
 name = "contract-intelligence-t1"
 version = "0.1.0"
-description = "Add your description here"
+description = "Contract information extraction pipeline"
 readme = "README.md"
-requires-python = ">=3.12"
+
+# CUDA extension compatibility is usually better when the Python minor
+# version is constrained.
+requires-python = ">=3.12,<3.13"
+
 dependencies = [
-    "accelerate>=1.0.0",
-    "gdown>=6.1.0",
-    "ocrmypdf>=17.8.1",
-    "pdf2image>=1.17.0",
-    "pymupdf>=1.28.0",
-    "pypdf>=6.14.2",
-    "pytesseract>=0.3.13",
-    "python-docx>=1.2.0",
-    "python-dotenv>=1.2.2",
-    "requests>=2.34.2",
-    "torch>=2.13.0",
-    "torchaudio>=2.11.0",
-    "torchvision>=0.28.0",
-    "transformers>=5.0.0",
+    "accelerate>=1.0,<2",
+    "gdown>=6.1,<7",
+    "ocrmypdf>=17.8,<18",
+    "pdf2image>=1.17,<2",
+    "pymupdf>=1.28,<2",
+    "pypdf>=6.14,<7",
+    "pytesseract>=0.3.13,<0.4",
+    "python-docx>=1.2,<2",
+    "python-dotenv>=1.2,<2",
+    "requests>=2.34,<3",
+    "transformers>=5.0,<6",
+    # Keep the officially matching versions together.
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "pydantic>=2.13.4",
 ]
-[tool.uv.sources]
-torch = [{ index = "pytorch-cu130" }]
-torchvision = [{ index = "pytorch-cu130" }]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
+required-environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

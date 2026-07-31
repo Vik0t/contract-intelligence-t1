@@ -1,104 +1,141 @@
-from pypdf import PdfReader
-import docx
-import fitz
-import pytesseract
-from pdf2image import convert_from_path
+from __future__ import annotations
 
-def is_image_only_pdf(pdf_path):
-    """Returns True if the PDF contains images but zero digital text on all pages."""
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception as e:
-        print(f"Error opening file: {e}")
-        return False
+from pathlib import Path
 
-    has_images = False
-    has_text = False
+from docx import Document
+from docx.table import Table
 
-    for page in doc:
-        # 1. Extract digital text from the page
-        text = page.get_text().strip()
-        if text:
-            has_text = True
-            break  # Early exit if we find digital text anywhere
-
-        # 2. Check for embedded images (XObjects) on the page
-        if page.get_images():
-            has_images = True
-
-    doc.close()
-
-    # The PDF is "just images" if we found images and absolutely no digital text
-    return has_images and not has_text
+from src.document_ir import (
+    BlockIR,
+    BlockKind,
+    BlockSource,
+    DocumentIR,
+    PageIR,
+    SourceFormat,
+)
+from src.ocr import OCRBackend
+from src.pdf_parser import parse_pdf
 
 
-def ocr_image(image):
-    """
-    Performs OCR on a given image and returns the extracted text.
+def parse_docx(file_path: str | Path) -> DocumentIR:
+    """Преобразует DOCX в DocumentIR без попытки восстановить экранную пагинацию."""
+    path = Path(file_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Файл не найден: {path}")
+    if path.suffix.lower() != ".docx":
+        raise ValueError("Ожидался DOCX-файл")
 
-    Args:
-        image (PIL.Image): The image to perform OCR on.
-    """
-    images = convert_from_path(image, dpi=300)
+    document = Document(path)
+    blocks: list[BlockIR] = []
 
-    text_results = []
+    for order, item in enumerate(document.iter_inner_content()):
+        if isinstance(item, Table):
+            rows = [
+                " | ".join(cell.text.strip() for cell in row.cells)
+                for row in item.rows
+            ]
+            text = "\n".join(row for row in rows if row.strip(" |"))
+            kind = BlockKind.TABLE
+        else:
+            text = item.text.strip()
+            kind = BlockKind.PARAGRAPH
 
-    # 2. Loop through images and apply OCR
-    for i, img in enumerate(images):
-        text = pytesseract.image_to_string(img)
-        text_results.append(text)
+        if not text:
+            continue
 
-    return text_results
+        blocks.append(
+            BlockIR(
+                id=f"docx-block-{order}",
+                kind=kind,
+                text=text,
+                source=BlockSource.DOCX,
+                order=order,
+            )
+        )
 
-def parse_pdf(file_path):
-    """
-    парсит пдф
-
-    Args:
-        file_path (str): The path to the PDF file.
-    """
-    if is_image_only_pdf(file_path):
-        return ocr_image(file_path)
-    reader = PdfReader(file_path)
-    full_text = ""
-
-    # Loop through each page and extract text
-    for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            full_text += text + "\n"
-
-    return full_text
-
-
-
-def parse_docx(file_path):
-    """
-    парсит docx файл
-
-    Args:
-        file_path (str): The path to the DOCX file.
-    """
-    doc = docx.Document(file_path)
-   
-    full_text = [para.text for para in doc.paragraphs]
-    
-    return '\n'.join(full_text)
-
-
+    return DocumentIR(
+        source_format=SourceFormat.DOCX,
+        source_path=str(path.resolve()),
+        page_count=1,
+        pages=[
+            PageIR(
+                number=1,
+                blocks=blocks,
+                needs_ocr=False,
+            )
+        ],
+        warnings=[
+            "DOCX не хранит надёжную физическую пагинацию; "
+            "весь документ представлен как логическая страница 1"
+        ],
+    )
 
 
+def parse_document(
+    file_path: str | Path,
+    *,
+    ocr_backend: OCRBackend | None = None,
+    ocr_dpi: int = 200,
+) -> DocumentIR:
+    """Маршрутизирует поддерживаемый файл в соответствующий DocumentIR-парсер."""
+    path = Path(file_path)
+    suffix = path.suffix.lower()
 
-def parse_file(file_path):
-    """
-    парсит файл в зависимости от его расширения
+    if suffix == ".pdf":
+        return parse_pdf(path, ocr_backend=ocr_backend, ocr_dpi=ocr_dpi)
+    if suffix == ".docx":
+        return parse_docx(path)
 
-    Args:
-        file_path (str): The path to the file.
-    """
-    if file_path.endswith('.pdf'):
-        return parse_pdf(file_path)
-    elif file_path.endswith('.docx'):
-        return parse_docx(file_path)
-    else:
-        raise ValueError("Unsupported file format. Only PDF and DOCX are supported.")
+    raise ValueError("Поддерживаются только PDF и DOCX")
+
+
+def document_ir_to_text(
+    document: DocumentIR,
+    *,
+    start_page: int = 1,
+    max_pages: int | None = None,
+) -> str:
+    """Готовит единый текст с метками страниц для структурного извлечения."""
+    if start_page < 1:
+        raise ValueError("start_page должен быть не меньше 1")
+    if max_pages is not None and max_pages < 1:
+        raise ValueError("max_pages должен быть положительным")
+
+    start_index = start_page - 1
+    if start_index >= len(document.pages):
+        raise ValueError(f"start_page должен быть от 1 до {len(document.pages)}")
+
+    pages = document.pages[start_index:]
+    if max_pages is not None:
+        pages = pages[:max_pages]
+
+    chunks: list[str] = []
+    for page in pages:
+        page_number = page.number or 1
+        chunks.append(f"PAGE {page_number}")
+
+        ocr_blocks = [
+            block for block in page.blocks if block.source == BlockSource.OCR
+        ]
+        # На OCR-странице распознанный слой обычно содержит всю страницу.
+        # DIGITAL-блоки остаются в IR для аудита, но не дублируются в тексте модели.
+        selected = ocr_blocks if page.needs_ocr and ocr_blocks else page.blocks
+        selected = sorted(selected, key=_reading_order)
+        chunks.extend(block.text for block in selected)
+
+    text = "\n\n".join(chunk for chunk in chunks if chunk.strip()).strip()
+    if not text:
+        raise ValueError("Документ не содержит текста для извлечения")
+    return text
+
+
+def _reading_order(block: BlockIR) -> tuple[float, float, float]:
+    if block.order is not None:
+        return (0, float(block.order), 0)
+    if block.bbox is not None:
+        return (1, block.bbox.y0, block.bbox.x0)
+    return (2, 0, 0)
+
+
+# Совместимое имя для старых вызовов проекта.
+parse_file = parse_document

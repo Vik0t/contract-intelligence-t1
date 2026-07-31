@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import argparse
+from datetime import date
+from functools import lru_cache
 import json
-import sys
 from pathlib import Path
+import re
 from typing import Any
 
-import fitz
 import torch
-from PIL import Image
 from transformers import AutoModelForMultimodalLM, AutoProcessor
+
+from src.document_ir import DocumentIR
+from src.ocr import OCRBackend, TesseractOCRBackend
+from src.parsing import document_ir_to_text, parse_document
 
 MODEL_ID = "numind/NuExtract3"
 
@@ -109,40 +112,13 @@ INSTRUCTIONS = """
 """.strip()
 
 
-def pdf_to_images(path: Path, dpi: int, start_page: int, max_pages: int) -> tuple[list[Image.Image], int]:
-    images: list[Image.Image] = []
-    with fitz.open(path) as doc:
-        total_pages = len(doc)
-        start_index = start_page - 1
-        if start_index < 0 or start_index >= total_pages:
-            raise ValueError(f"start-page должен быть от 1 до {total_pages}")
-
-        stop_index = min(total_pages, start_index + max_pages)
-        for page_index in range(start_index, stop_index):
-            page = doc[page_index]
-            pix = page.get_pixmap(dpi=dpi, alpha=False)
-            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-            images.append(image)
-
-    return images, total_pages
-
-
-def load_document(path: Path, dpi: int, start_page: int, max_pages: int) -> tuple[list[Image.Image], int]:
-    suffix = path.suffix.lower()
-    if suffix == ".pdf":
-        return pdf_to_images(path, dpi=dpi, start_page=start_page, max_pages=max_pages)
-    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
-        return [Image.open(path).convert("RGB")], 1
-    raise ValueError("Поддерживаются PDF и изображения PNG/JPG/WEBP/BMP/TIFF")
-
-
-def build_messages(images: list[Image.Image], start_page: int) -> list[dict[str, Any]]:
-    content: list[dict[str, Any]] = []
-    for offset, image in enumerate(images):
-        page_number = start_page + offset
-        content.append({"type": "text", "text": f"PAGE {page_number}"})
-        content.append({"type": "image", "image": image})
-    return [{"role": "user", "content": content}]
+def build_messages(text: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": text}],
+        }
+    ]
 
 
 def parse_json_output(text: str) -> Any:
@@ -165,39 +141,105 @@ def parse_json_output(text: str) -> Any:
         return json.loads(cleaned[start : end + 1])
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Извлечение реквизитов договора через numind/NuExtract3"
-    )
-    parser.add_argument("document", type=Path, help="Путь к PDF или изображению")
-    parser.add_argument("--output", type=Path, default=Path("contract_result.json"))
-    parser.add_argument("--raw-output", type=Path, default=Path("contract_result_raw.txt"))
-    parser.add_argument("--dpi", type=int, default=120, help="DPI рендеринга PDF")
-    parser.add_argument("--start-page", type=int, default=1)
-    parser.add_argument(
-        "--max-pages",
-        type=int,
-        default=3,
-        help="Сколько страниц отправить за один запуск. Для 16 ГБ VRAM начните с 2–3.",
-    )
-    parser.add_argument(
-        "--thinking",
-        action="store_true",
-        help="Включить reasoning для сложного документа; медленнее и требует больше памяти.",
-    )
-    parser.add_argument("--max-new-tokens", type=int, default=2048)
-    args = parser.parse_args()
+def validate_extraction(
+    result: dict[str, Any],
+    document: DocumentIR,
+) -> dict[str, Any]:
+    """Исправляет только значения, однозначно проверяемые по evidence."""
+    page_texts = {
+        page.number or index + 1: _normalize_text(
+            "\n".join(block.text for block in page.blocks)
+        )
+        for index, page in enumerate(document.pages)
+    }
 
-    if not args.document.exists():
-        print(f"Файл не найден: {args.document}", file=sys.stderr)
-        return 2
-    if not torch.cuda.is_available():
-        print("CUDA недоступна. Сначала запустите check_cuda.py.", file=sys.stderr)
-        return 3
+    evidence_fields = [
+        ("contract_number", "evidence", "page_number"),
+        ("contract_date", "evidence", "page_number"),
+        ("contract_type", "evidence", "page_number"),
+        ("place", "evidence", "page_number"),
+        ("term", "evidence", "page_number"),
+        ("total_amount", "evidence", "page_number"),
+        ("vat", "evidence", "page_number"),
+    ]
+    for field_name, evidence_name, page_name in evidence_fields:
+        item = result.get(field_name)
+        if isinstance(item, dict):
+            _repair_page_number(item, evidence_name, page_name, page_texts)
 
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"Загрузка {MODEL_ID}. При первом запуске будет скачано около 9.3 ГБ...")
+    parties = result.get("parties")
+    if isinstance(parties, list):
+        for party in parties:
+            if not isinstance(party, dict):
+                continue
+            _repair_page_number(
+                party,
+                "name_evidence",
+                "name_page_number",
+                page_texts,
+            )
+            _repair_page_number(
+                party,
+                "inn_evidence",
+                "inn_page_number",
+                page_texts,
+            )
 
+    contract_date = result.get("contract_date")
+    if isinstance(contract_date, dict):
+        normalized_date = _date_from_evidence(contract_date.get("evidence"))
+        if normalized_date is not None:
+            contract_date["value"] = normalized_date
+
+    return result
+
+
+def _repair_page_number(
+    item: dict[str, Any],
+    evidence_name: str,
+    page_name: str,
+    page_texts: dict[int, str],
+) -> None:
+    evidence = item.get(evidence_name)
+    if not isinstance(evidence, str) or not evidence.strip():
+        return
+
+    needle = _normalize_text(evidence)
+    matching_pages = [
+        page_number
+        for page_number, page_text in page_texts.items()
+        if needle in page_text
+    ]
+    if len(matching_pages) == 1:
+        item[page_name] = matching_pages[0]
+
+
+def _date_from_evidence(evidence: Any) -> str | None:
+    if not isinstance(evidence, str):
+        return None
+
+    matches = re.findall(
+        r"(?<!\d)([0-3]?\d)[./-]([01]?\d)[./-]((?:19|20)\d{2})(?!\d)",
+        evidence,
+    )
+    valid_dates: list[date] = []
+    for day, month, year in matches:
+        try:
+            valid_dates.append(date(int(year), int(month), int(day)))
+        except ValueError:
+            continue
+    if len(valid_dates) == 1:
+        return valid_dates[0].isoformat()
+    return None
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+@lru_cache(maxsize=1)
+def load_model() -> tuple[Any, Any]:
+    """Загружает модель один раз на процесс и возвращает processor и model."""
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
     model = AutoModelForMultimodalLM.from_pretrained(
         MODEL_ID,
@@ -206,22 +248,54 @@ def main() -> int:
         trust_remote_code=True,
         low_cpu_mem_usage=True,
     ).eval()
+    return processor, model
 
-    images, total_pages = load_document(
-        args.document,
-        dpi=args.dpi,
-        start_page=args.start_page,
-        max_pages=args.max_pages,
-    )
-    last_page = args.start_page + len(images) - 1
-    print(f"Обрабатываются страницы {args.start_page}–{last_page} из {total_pages}")
-    if last_page < total_pages:
-        print(
-            "Внимание: документ обработан не полностью. Для следующего блока используйте "
-            f"--start-page {last_page + 1}."
+
+def extract_contract_key_data(
+    document: str | Path | DocumentIR,
+    *,
+    ocr_backend: OCRBackend | None = None,
+    ocr_dpi: int = 200,
+    start_page: int = 1,
+    max_pages: int | None = None,
+    thinking: bool = False,
+    max_new_tokens: int = 2048,
+) -> dict[str, Any]:
+    """Извлекает реквизиты из PDF/DOCX или готового DocumentIR.
+
+    PDF сначала проходит разбор цифрового слоя. Tesseract вызывается только для
+    страниц без достаточного текста, после чего NuExtract3 получает единый текст.
+    """
+    if ocr_dpi <= 0:
+        raise ValueError("ocr_dpi должен быть положительным")
+    if start_page < 1:
+        raise ValueError("start_page должен быть не меньше 1")
+    if max_pages is not None and max_pages < 1:
+        raise ValueError("max_pages должен быть не меньше 1")
+    if max_new_tokens < 1:
+        raise ValueError("max_new_tokens должен быть не меньше 1")
+
+    if isinstance(document, DocumentIR):
+        document_ir = document
+    else:
+        backend = ocr_backend or TesseractOCRBackend()
+        document_ir = parse_document(
+            document,
+            ocr_backend=backend,
+            ocr_dpi=ocr_dpi,
         )
 
-    messages = build_messages(images, start_page=args.start_page)
+    text = document_ir_to_text(
+        document_ir,
+        start_page=start_page,
+        max_pages=max_pages,
+    )
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA недоступна. Локальная модель требует GPU.")
+
+    processor, model = load_model()
+    messages = build_messages(text)
     inputs = processor.apply_chat_template(
         messages,
         add_generation_prompt=True,
@@ -230,14 +304,13 @@ def main() -> int:
         return_tensors="pt",
         template=json.dumps(CONTRACT_TEMPLATE, ensure_ascii=False, indent=2),
         instructions=INSTRUCTIONS,
-        enable_thinking=args.thinking,
+        enable_thinking=thinking,
     ).to(model.device)
 
-    print("Запуск извлечения...")
     with torch.inference_mode():
         generated_ids = model.generate(
             **inputs,
-            max_new_tokens=args.max_new_tokens,
+            max_new_tokens=max_new_tokens,
             do_sample=False,
         )
 
@@ -248,23 +321,10 @@ def main() -> int:
         clean_up_tokenization_spaces=False,
     )[0].strip()
 
-    args.raw_output.write_text(raw, encoding="utf-8")
-
     try:
         parsed = parse_json_output(raw)
     except Exception as exc:
-        print(f"Не удалось разобрать JSON: {exc}", file=sys.stderr)
-        print(f"Сырой ответ сохранён в {args.raw_output}")
-        return 4
-
-    args.output.write_text(
-        json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(json.dumps(parsed, ensure_ascii=False, indent=2))
-    print(f"\nРезультат: {args.output.resolve()}")
-    print(f"Сырой ответ: {args.raw_output.resolve()}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        raise ValueError(f"Модель вернула невалидный JSON: {raw}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Модель вернула JSON, но не объект")
+    return validate_extraction(parsed, document_ir)
