@@ -9,3 +9,4 @@
 *.env
 *.txt
 dataset
+*.db

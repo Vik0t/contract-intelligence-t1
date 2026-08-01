@@ -1,12 +1,12 @@
 from datetime import datetime, timedelta
 import os, tempfile, bcrypt
-from fastapi import FastAPI, File, HTTPException, Depends, UploadFile
+from typing import Optional
+from fastapi import FastAPI, File, Form, HTTPException, Depends, Header, UploadFile
 
 import backend.database as database
 import backend.api_requests as api_requests
 
-from src.parsing import parse_file
-from src.llm import extract_contract_key_data
+from src.local_extraction import extract_text_from_document, extract_contract_key_data
 
 app = FastAPI(
     title="T1 Contract Intelligence",
@@ -262,12 +262,15 @@ async def validate_session(session_data: api_requests.SessionValidateRequest):
     summary="Get current user",
     description="Get current authenticated user's profile"
 )
-async def get_current_user(request: api_requests.CurrentUserRequest = Depends()):
+async def get_current_user(authorization: str = Header(...)):
     """
     Get current user profile
     Authentication token automatically extracted from Authorization header
     """
-    user, db = get_user_from_token(request.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
     try:
         return create_user_response(user)
     finally:
@@ -280,7 +283,10 @@ async def get_current_user(request: api_requests.CurrentUserRequest = Depends())
     summary="Update current user",
     description="Update current authenticated user's profile"
 )
-async def update_current_user(update_data: api_requests.UserUpdateRequest):
+async def update_current_user(
+    update_data: api_requests.UserUpdateRequest,
+    authorization: str = Header(...)
+):
     """
     Update current user profile
     - username: New username (optional)
@@ -288,7 +294,10 @@ async def update_current_user(update_data: api_requests.UserUpdateRequest):
     - password: New password (optional)
     Authentication token automatically extracted from Authorization header
     """
-    user, db = get_user_from_token(update_data.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
     try:
         if update_data.username and update_data.username != user.username:
             if database.get_user(db, username=update_data.username):
@@ -325,12 +334,15 @@ async def update_current_user(update_data: api_requests.UserUpdateRequest):
     summary="Delete current user",
     description="Delete current authenticated user's account"
 )
-async def delete_current_user(request: api_requests.UserDeleteRequest = Depends()):
+async def delete_current_user(authorization: str = Header(...)):
     """
     Delete current user account
     Authentication token automatically extracted from Authorization header
     """
-    user, db = get_user_from_token(request.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
     try:
         database.delete_user(db, user.id)
         return api_requests.UserDeleteResponse(
@@ -350,7 +362,8 @@ async def delete_current_user(request: api_requests.UserDeleteRequest = Depends(
 )
 async def upload_document(
     file: UploadFile = File(...),
-    document_data: api_requests.DocumentUploadRequest = Depends(api_requests.DocumentUploadRequest.as_form)
+    template_id: int = Form(...),
+    authorization: str = Header(...)
 ):
     """
     Upload a new document
@@ -358,7 +371,11 @@ async def upload_document(
     - template_id: ID of the template to use
     Authentication token automatically extracted from Authorization header
     """
-    user, _ = get_user_from_token(document_data.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    
+    user, _ = get_user_from_token(token)
     _.close()
     
     file_extension = os.path.splitext(file.filename)[1].lower()
@@ -380,23 +397,30 @@ async def upload_document(
             document = database.create_document(
                 db,
                 owner=user.id,
-                template_id=document_data.template_id,
+                template_id=template_id,
                 filename=file.filename
             )
             
             start_time = datetime.now()
             try:
-                parsed_text = parse_file(temp_path)
+                parsed_text, document_ir = extract_text_from_document(temp_path)
             except Exception as e:
                 database.delete_document(db, document.id)
                 raise HTTPException(
                     status_code=400,
                     detail=f"Failed to parse document: {str(e)}"
-                )
-            
+            )
+
             parsing_time = (datetime.now() - start_time).total_seconds()
             
-            database.create_parsed_document(db, document_id=document.id, text=parsed_text)
+            document_ir_dict = document_ir.model_dump() if document_ir else None
+
+            database.create_parsed_document(
+                db,
+                document_id=document.id,
+                text=parsed_text,
+                document_ir=document_ir_dict
+            )
             database.create_stats(
                 db,
                 document_id=document.id,
@@ -422,7 +446,7 @@ async def upload_document(
                 os.remove(temp_path)
             except:
                 pass
-
+            
 
 @app.get(
     "/documents",
@@ -430,17 +454,24 @@ async def upload_document(
     summary="List documents",
     description="Get all documents for current user"
 )
-async def list_documents(request: api_requests.DocumentListRequest = Depends()):
+async def list_documents(
+    page: Optional[int] = 1,
+    limit: Optional[int] = 50,
+    authorization: str = Header(...)
+):
     """
     Get all documents for current user
     - page: Page number for pagination
     - limit: Items per page
     Authentication token automatically extracted from Authorization header
     """
-    user, db = get_user_from_token(request.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
     try:
-        page = request.page or 1
-        limit = request.limit or 50
+        page = page or 1
+        limit = limit or 50
         
         documents, total = database.get_documents_by_owner_paginated(
             db, 
@@ -465,15 +496,21 @@ async def list_documents(request: api_requests.DocumentListRequest = Depends()):
     summary="Get document",
     description="Get document by ID with its metadata"
 )
-async def get_document(request: api_requests.DocumentGetRequest = Depends()):
+async def get_document(
+    document_id: int,
+    authorization: str = Header(...)
+):
     """
     Get document by ID with its metadata
     - document_id: ID of the document to retrieve
     Authentication token automatically extracted from Authorization header
     """
-    user, db = get_user_from_token(request.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
     try:
-        document = database.get_document(db, document_id=request.document_id)
+        document = database.get_document(db, document_id=document_id)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -502,15 +539,21 @@ async def get_document(request: api_requests.DocumentGetRequest = Depends()):
     summary="Delete document",
     description="Delete document by ID"
 )
-async def delete_document(request: api_requests.DocumentDeleteRequest = Depends()):
+async def delete_document(
+    document_id: int,
+    authorization: str = Header(...)
+):
     """
     Delete document by ID
     - document_id: ID of the document to delete
     Authentication token automatically extracted from Authorization header
     """
-    user, db = get_user_from_token(request.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
     try:
-        document = database.get_document(db, document_id=request.document_id)
+        document = database.get_document(db, document_id=document_id)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -528,20 +571,23 @@ async def delete_document(request: api_requests.DocumentDeleteRequest = Depends(
 
 @app.post(
     "/documents/{document_id}/metadata",
-    response_model=api_requests.MetadataParseResponse,
-    summary="Parse metadata",
-    description="Parse metadata to a document"
+    response_model=api_requests.MetadataExtractResponse,
+    summary="Extract metadata",
+    description="Extract metadata to a document"
 )
-async def parse_metadata(
+async def extract_metadata(
     document_id: int,
-    request: api_requests.MetadataParseRequest = Depends()
+    authorization: str = Header(...)
 ):
     """
-    Parse metadata to a document
+    Extract metadata from the document
     - document_id: ID of the document
     Authentication token automatically extracted from Authorization header
     """
-    user, db = get_user_from_token(request.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
     try:
         document = database.get_document(db, document_id=document_id)
         if not document:
@@ -553,9 +599,23 @@ async def parse_metadata(
         if not parsed_doc:
             raise HTTPException(status_code=400, detail="Document has not been parsed yet")
         
+        document_ir = None
+        if parsed_doc.document_ir:
+            from src.document_ir import DocumentIR
+            document_ir = DocumentIR.model_validate(parsed_doc.document_ir)
+
         start_time = datetime.now()
         try:
-            extracted_data = extract_contract_key_data(parsed_doc.text)
+            extracted_data = extract_contract_key_data(
+                text=parsed_doc.text,
+                document_ir=document_ir,
+                max_new_tokens=4096  # Increased from default 2048
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Model could not process this document properly. Please try again."
+            )
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -577,7 +637,7 @@ async def parse_metadata(
                 total_tokens=latest_stat.total_tokens + len(str(extracted_data).split())
             )
         
-        return api_requests.MetadataParseResponse(
+        return api_requests.MetadataExtractResponse(
             success=True,
             message="Metadata extracted successfully",
             metadata_id=metadata.id,
@@ -585,7 +645,7 @@ async def parse_metadata(
         )
     finally:
         db.close()
-
+        
 # ============ ADMIN ENDPOINTS ============
 
 @app.get(
@@ -594,15 +654,21 @@ async def parse_metadata(
     summary="Get statistics",
     description="Get extraction statistics (admin only)"
 )
-async def get_stats(request: api_requests.StatsRequest = Depends()):
+async def get_stats(
+    period_days: Optional[int] = 30,
+    authorization: str = Header(...)
+):
     """
     Get extraction stats for admins
     - period_days: Number of days to include in stats (default 30)
     Includes token usage, document processing metrics, etc.
     """
-    _, db = get_admin_from_token(request.token.token)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    _, db = get_admin_from_token(token)
     try:
-        period_days = request.period_days or 30
+        period_days = period_days or 30
         end_date = datetime.now()
         start_date = end_date - timedelta(days=period_days)
         

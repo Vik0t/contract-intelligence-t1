@@ -58,7 +58,7 @@ class Document(Base):
     has_tables = Column(Boolean, default=False)
     language = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=func.now())
-    metadata = relationship('DocumentMetadata', backref='document', uselist=False)
+    document_metadata = relationship('DocumentMetadata', backref='document', uselist=False)
     parsed_text = relationship('ParsedDocument', backref='document', uselist=False)
 
 class DocumentMetadata(Base):
@@ -84,6 +84,7 @@ class ParsedDocument(Base):
     id = Column(Integer, primary_key=True)
     document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), unique=True, nullable=False)
     text = Column(Text, nullable=False)
+    document_ir = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
 # ============ ENGINE & SESSION ============
@@ -136,9 +137,10 @@ def update_user(session, user_id, **kwargs):
     return user
 
 def delete_user(session, user_id):
-    """Delete a user."""
+    """Delete a user and their sessions."""
     user = get_user(session, user_id=user_id)
     if user:
+        session.query(Session).filter(Session.user_id == user_id).delete()
         session.delete(user)
         session.commit()
     return user
@@ -277,9 +279,11 @@ def update_document(session, document_id, **kwargs):
     return doc
 
 def delete_document(session, document_id):
-    """Delete a document."""
+    """Delete a document and all related data."""
     doc = get_document(session, document_id)
     if doc:
+        session.query(ParsedDocument).filter(ParsedDocument.document_id == document_id).delete()
+        session.query(DocumentMetadata).filter(DocumentMetadata.document_id == document_id).delete()
         session.delete(doc)
         session.commit()
     return doc
@@ -379,9 +383,13 @@ def delete_stats(session, stats_id):
 
 # ============ PARSED DOCUMENT OPERATIONS ============
 
-def create_parsed_document(session, document_id, text):
-    """Create parsed document text."""
-    parsed = ParsedDocument(document_id=document_id, text=text)
+def create_parsed_document(session, document_id, text, document_ir=None):
+    """Create parsed document text and DocumentIR."""
+    parsed = ParsedDocument(
+        document_id=document_id, 
+        text=text,
+        document_ir=document_ir
+    )
     session.add(parsed)
     session.commit()
     return parsed
@@ -405,14 +413,16 @@ def get_parsed_documents_by_period(session, start_date, end_date):
         ParsedDocument.created_at <= end_date
     ).all()
 
-def update_parsed_document(session, document_id, text):
-    """Update parsed document text."""
+def update_parsed_document(session, document_id, text, document_ir=None):
+    """Update parsed document text and DocumentIR."""
     parsed = get_parsed_document(session, document_id)
     if parsed:
         parsed.text = text
+        if document_ir is not None:
+            parsed.document_ir = document_ir
         session.commit()
     else:
-        parsed = create_parsed_document(session, document_id, text)
+        parsed = create_parsed_document(session, document_id, text, document_ir)
     return parsed
 
 def delete_parsed_document(session, document_id):

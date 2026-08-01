@@ -1,5 +1,5 @@
 from re import fullmatch, match
-from fastapi import File, Form, HTTPException, Header, UploadFile
+from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -11,29 +11,6 @@ class UserRole(str, Enum):
     """User role enumeration for access control"""
     USER = 'user'
     ADMIN = 'admin'
-
-# ============ AUTHENTICATION HEADER ============
-
-class TokenHeader(BaseModel):
-    """
-    Pydantic model for extracting Bearer token from Authorization header
-    """
-    authorization: str = Header(
-        ...,
-        description="Bearer token in format 'Bearer <token>'"
-    )
-    
-    @property
-    def token(self) -> str:
-        """
-        Extract and validate the token from the Authorization header
-        """
-        if not self.authorization.startswith("Bearer "):
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication scheme. Expected 'Bearer <token>'"
-            )
-        return self.authorization.replace("Bearer ", "")
 
 # ============ AUTHENTICATION TYPES ============
 
@@ -213,15 +190,6 @@ class LogoutResponse(BaseModel):
 
 # ============ USER TYPES ============
 
-class CurrentUserRequest(BaseModel):
-    """
-    Request model for getting current user
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-
 class UserResponse(BaseModel):
     """
     User information response
@@ -251,10 +219,6 @@ class UserUpdateRequest(BaseModel):
     """
     Request model for updating user profile
     """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
     username: Optional[str] = Field(
         None,
         min_length=3,
@@ -309,15 +273,6 @@ class UserUpdateResponse(BaseModel):
         description="Updated user information"
     )
 
-class UserDeleteRequest(BaseModel):
-    """
-    Request model for user deletion
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-
 class UserDeleteResponse(BaseModel):
     """
     Response model for user deletion
@@ -332,31 +287,6 @@ class UserDeleteResponse(BaseModel):
     )
 
 # ============ DOCUMENT TYPES ============
-
-class DocumentUploadRequest(BaseModel):
-    """
-    Request model for document upload
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-    template_id: int = Field(
-        ...,
-        description="ID of the template to use for extraction"
-    )
-    
-    @classmethod
-    def as_form(
-        cls,
-        file: UploadFile = File(...),
-        template_id: int = Form(...),
-        authorization: str = Header(...)
-    ):
-        return cls(
-            template_id=template_id,
-            token=TokenHeader(authorization=authorization)
-        )
 
 class DocumentUploadResponse(BaseModel):
     """
@@ -416,27 +346,6 @@ class DocumentMetadataResponse(DocumentResponse):
         None,
         description="Added metadata information"
     )
-    
-
-class DocumentListRequest(BaseModel):
-    """
-    Request model for listing documents
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-    page: Optional[int] = Field(
-        1,
-        ge=1,
-        description="Page number for pagination"
-    )
-    limit: Optional[int] = Field(
-        50,
-        ge=1,
-        le=100,
-        description="Number of items per page"
-    )
 
 class DocumentListResponse(BaseModel):
     """
@@ -459,32 +368,6 @@ class DocumentListResponse(BaseModel):
         description="List of documents"
     )
 
-class DocumentGetRequest(BaseModel):
-    """
-    Request model for getting a single document
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-    document_id: int = Field(
-        ...,
-        description="ID of the document to retrieve"
-    )
-
-class DocumentDeleteRequest(BaseModel):
-    """
-    Request model for document deletion
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-    document_id: int = Field(
-        ...,
-        description="ID of the document to delete"
-    )
-
 class DocumentDeleteResponse(BaseModel):
     """
     Response model for document deletion
@@ -500,38 +383,25 @@ class DocumentDeleteResponse(BaseModel):
 
 # ============ METADATA TYPES ============
 
-class MetadataParseRequest(BaseModel):
+class MetadataExtractResponse(BaseModel):
     """
-    Request model for parsing metadata
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-    document_id: int = Field(
-        ...,
-        description="ID of the document to parse metadata for"
-    )
-
-class MetadataParseResponse(BaseModel):
-    """
-    Response model for parsing metadata
+    Response model for metadata extraction
     """
     success: bool = Field(
         ...,
-        description="Whether metadata addition was successful"
+        description="Whether metadata extraction was successful"
     )
     message: str = Field(
         ...,
-        description="Metadata addition status message"
+        description="Metadata extraction status message"
     )
     metadata_id: Optional[int] = Field(
         None,
-        description="ID of the added metadata"
+        description="ID of the extracted metadata"
     )
     metadata: Optional['MetadataResponse'] = Field(
         None,
-        description="Added metadata information"
+        description="Extracted metadata information"
     )
 
 class MetadataResponse(BaseModel):
@@ -582,15 +452,6 @@ class SessionResponse(BaseModel):
         description="Session expiration timestamp"
     )
 
-class SessionListRequest(BaseModel):
-    """
-    Request model for listing sessions
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-
 class SessionListResponse(BaseModel):
     """
     Response model for session list
@@ -602,15 +463,6 @@ class SessionListResponse(BaseModel):
     sessions: List[SessionResponse] = Field(
         ...,
         description="List of active sessions"
-    )
-
-class SessionRevokeRequest(BaseModel):
-    """
-    Request model for session revocation
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
     )
 
 class SessionRevokeResponse(BaseModel):
@@ -653,26 +505,6 @@ class TemplateResponse(BaseModel):
         description="Template creation timestamp"
     )
 
-class TemplateListRequest(BaseModel):
-    """
-    Request model for listing templates
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-    page: Optional[int] = Field(
-        1,
-        ge=1,
-        description="Page number for pagination"
-    )
-    limit: Optional[int] = Field(
-        50,
-        ge=1,
-        le=100,
-        description="Number of items per page (max 100)"
-    )
-
 class TemplateListResponse(BaseModel):
     """
     Response model for template list with pagination
@@ -694,31 +526,7 @@ class TemplateListResponse(BaseModel):
         description="List of templates"
     )
 
-class TemplateGetRequest(BaseModel):
-    """
-    Request model for getting a template
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-
 # ============ ADMIN TYPES ============
-
-class StatsRequest(BaseModel):
-    """
-    Request model for stats endpoint
-    """
-    token: TokenHeader = Field(
-        ...,
-        description="Authentication token in Authorization header"
-    )
-    period_days: Optional[int] = Field(
-        30,
-        ge=1,
-        le=365,
-        description="Number of days to include in stats"
-    )
 
 class StatsResponse(BaseModel):
     """
