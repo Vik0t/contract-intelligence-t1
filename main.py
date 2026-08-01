@@ -3,7 +3,9 @@ import json
 
 from cuda_dll_setup import configure_cuda_dlls
 
-configure_cuda_dlls()
+import platform
+if platform.system() != "Darwin":
+    configure_cuda_dlls()
 
 from src.local_extraction import extract_contract_key_data
 

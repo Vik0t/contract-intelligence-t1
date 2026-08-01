@@ -4,8 +4,6 @@ version = "0.1.0"
 description = "Contract information extraction pipeline"
 readme = "README.md"
 
-# CUDA extension compatibility is usually better when the Python minor
-# version is constrained.
 requires-python = ">=3.12,<3.13"
 
 dependencies = [
@@ -20,29 +18,11 @@ dependencies = [
     "python-dotenv>=1.2,<2",
     "requests>=2.34,<3",
     "transformers>=5.0,<6",
-    # Keep the officially matching versions together.
-    "torch==2.11.0",
-    "torchvision==0.26.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
     "pydantic>=2.13.4",
+    "mlx-lm>=0.31.3",
 ]
-
-[tool.uv]
-environments = [
-    "sys_platform == 'win32' and platform_machine == 'AMD64'",
-]
-
-required-environments = [
-    "sys_platform == 'win32' and platform_machine == 'AMD64'",
-]
-
-[[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu130" }
-torchvision = { index = "pytorch-cu130" }
 
 [dependency-groups]
 dev = [

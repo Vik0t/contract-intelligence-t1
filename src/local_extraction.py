@@ -5,6 +5,8 @@ from functools import lru_cache
 import json
 from pathlib import Path
 import re
+import platform
+import sys
 from typing import Any
 
 import torch
@@ -15,6 +17,22 @@ from src.ocr import OCRBackend, TesseractOCRBackend
 from src.parsing import document_ir_to_text, parse_document
 
 MODEL_ID = "numind/NuExtract3"
+
+IS_MACOS = platform.system() == "Darwin"
+IS_WINDOWS = platform.system() == "Windows"
+IS_LINUX = platform.system() == "Linux"
+
+if IS_MACOS:
+    try:
+        # Если macos и доступна mlx-lm, подгружаем ее
+        import mlx_lm
+        from mlx_lm import load, generate
+        MLX_AVAILABLE = True
+    except ImportError:
+        # fallback на pytorch
+        MLX_AVAILABLE = False
+else:
+    MLX_AVAILABLE = False
 
 # Структура шаблона совпадает со структурой ожидаемого JSON.
 # verbatim-string просит модель возвращать текст дословно из документа.
@@ -239,32 +257,45 @@ def _normalize_text(value: str) -> str:
 
 @lru_cache(maxsize=1)
 def load_model() -> tuple[Any, Any]:
-    """Загружает модель один раз на процесс и возвращает processor и model."""
+    """Загружает модель один раз на процесс."""
+    if IS_MACOS and MLX_AVAILABLE:
+        model, tokenizer = load("numind/NuExtract3-mlx-8bits")
+        return model, tokenizer
+    
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.bfloat16
+    elif torch.backends.mps.is_available() and not IS_MACOS:
+        device = "mps"
+        dtype = torch.float32
+    else:
+        device = "cpu"
+        dtype = torch.float32
+    
     model = AutoModelForMultimodalLM.from_pretrained(
         MODEL_ID,
-        dtype=torch.bfloat16,
-        device_map="auto",
+        dtype=dtype,
+        device_map=device,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
     ).eval()
     return processor, model
 
 
-def extract_contract_key_data(
+def extract_text_from_document(
     document: str | Path | DocumentIR,
     *,
     ocr_backend: OCRBackend | None = None,
     ocr_dpi: int = 200,
     start_page: int = 1,
     max_pages: int | None = None,
-    thinking: bool = False,
-    max_new_tokens: int = 2048,
-) -> dict[str, Any]:
-    """Извлекает реквизиты из PDF/DOCX или готового DocumentIR.
-
+) -> tuple[str, DocumentIR]:
+    """Извлекает текст из документа и возвращает его вместе с DocumentIR.
+    
     PDF сначала проходит разбор цифрового слоя. Tesseract вызывается только для
-    страниц без достаточного текста, после чего NuExtract3 получает единый текст.
+    страниц без достаточного текста.
     """
     if ocr_dpi <= 0:
         raise ValueError("ocr_dpi должен быть положительным")
@@ -272,8 +303,6 @@ def extract_contract_key_data(
         raise ValueError("start_page должен быть не меньше 1")
     if max_pages is not None and max_pages < 1:
         raise ValueError("max_pages должен быть не меньше 1")
-    if max_new_tokens < 1:
-        raise ValueError("max_new_tokens должен быть не меньше 1")
 
     if isinstance(document, DocumentIR):
         document_ir = document
@@ -290,12 +319,59 @@ def extract_contract_key_data(
         start_page=start_page,
         max_pages=max_pages,
     )
+    
+    return text, document_ir
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA недоступна. Локальная модель требует GPU.")
 
+def extract_fields_from_text(
+    text: str,
+    document_ir: DocumentIR | None = None,
+    *,
+    thinking: bool = False,
+    max_new_tokens: int = 2048,
+) -> dict[str, Any]:
+    """Извлекает реквизиты из текста с помощью NuExtract3."""
+    if max_new_tokens < 1:
+        raise ValueError("max_new_tokens должен быть не меньше 1")
+    
+    if IS_MACOS and MLX_AVAILABLE:
+        model, tokenizer = load_model()
+        
+        messages = build_messages(text)
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+            template=json.dumps(CONTRACT_TEMPLATE, ensure_ascii=False, indent=2),
+            instructions=INSTRUCTIONS,
+            enable_thinking=thinking,
+        )
+        
+        raw = generate(
+            model,
+            tokenizer,
+            prompt=prompt,
+            max_tokens=max_new_tokens
+        )
+        
+        raw = raw.strip()
+        
+        try:
+            parsed = parse_json_output(raw)
+        except Exception as exc:
+            raise ValueError(f"Модель вернула невалидный JSON: {raw}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("Модель вернула JSON, но не объект")
+        
+        if document_ir is not None:
+            return validate_extraction(parsed, document_ir)
+        return parsed
+    
     processor, model = load_model()
     messages = build_messages(text)
+    
+    device = model.device
+    
     inputs = processor.apply_chat_template(
         messages,
         add_generation_prompt=True,
@@ -305,7 +381,9 @@ def extract_contract_key_data(
         template=json.dumps(CONTRACT_TEMPLATE, ensure_ascii=False, indent=2),
         instructions=INSTRUCTIONS,
         enable_thinking=thinking,
-    ).to(model.device)
+    )
+    
+    inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.inference_mode():
         generated_ids = model.generate(
@@ -327,4 +405,59 @@ def extract_contract_key_data(
         raise ValueError(f"Модель вернула невалидный JSON: {raw}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("Модель вернула JSON, но не объект")
-    return validate_extraction(parsed, document_ir)
+    
+    if document_ir is not None:
+        return validate_extraction(parsed, document_ir)
+    return parsed
+
+
+def extract_contract_key_data(
+    document: str | Path | DocumentIR | None = None,
+    text: str | None = None,
+    document_ir: DocumentIR | None = None,
+    *,
+    ocr_backend: OCRBackend | None = None,
+    ocr_dpi: int = 200,
+    start_page: int = 1,
+    max_pages: int | None = None,
+    thinking: bool = False,
+    max_new_tokens: int = 2048,
+) -> dict[str, Any]:
+    """Извлекает реквизиты из PDF/DOCX или готового текста.
+    
+    Поддерживает два режима использования:
+    1. Передать document - будет выполнен OCR и извлечение
+    2. Передать text (и опционально document_ir) - только извлечение из готового текста
+    
+    Args:
+        document: Путь к PDF/DOCX или готовый DocumentIR
+        text: Уже извлеченный текст документа (для повторного использования)
+        document_ir: DocumentIR для валидации (опционально, требуется для page_number)
+    """
+    if document is not None and text is not None:
+        raise ValueError("Нельзя передавать одновременно document и text")
+    
+    if document is None and text is None:
+        raise ValueError("Необходимо передать либо document, либо text")
+    
+    if document is not None:
+        extracted_text, extracted_document_ir = extract_text_from_document(
+            document,
+            ocr_backend=ocr_backend,
+            ocr_dpi=ocr_dpi,
+            start_page=start_page,
+            max_pages=max_pages,
+        )
+        return extract_fields_from_text(
+            extracted_text,
+            extracted_document_ir,
+            thinking=thinking,
+            max_new_tokens=max_new_tokens,
+        )
+    
+    return extract_fields_from_text(
+        text,
+        document_ir,
+        thinking=thinking,
+        max_new_tokens=max_new_tokens,
+    )
