@@ -52,7 +52,7 @@ class Document(Base):
     id = Column(Integer, primary_key=True)
     owner = Column(Integer, ForeignKey('users.id'))
     filename = Column(String(255))
-    template_id = Column(Integer, ForeignKey('templates.id'), nullable=False)
+    template_id = Column(Integer, ForeignKey('templates.id'), nullable=True)
     contract_family = Column(String(255), nullable=True)
     is_scan = Column(Boolean, default=False)
     has_tables = Column(Boolean, default=False)
@@ -91,7 +91,17 @@ class ParsedDocument(Base):
 
 def get_engine(db_path='sqlite:///documents.db'):
     """Create and return SQLAlchemy engine."""
-    return create_engine(db_path, echo=False)
+    engine = create_engine(db_path, echo=False)
+    
+    if 'sqlite' in db_path:
+        from sqlalchemy import event
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+    
+    return engine
 
 def create_tables(engine):
     """Create all database tables."""

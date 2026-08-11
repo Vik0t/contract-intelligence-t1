@@ -329,9 +329,9 @@ class DocumentResponse(BaseModel):
         None,
         description="Original filename"
     )
-    template_id: int = Field(
-        ...,
-        description="Template ID used for extraction"
+    template_id: Optional[int] = Field(
+        None,
+        description="Template ID used for extraction (optional)"
     )
     created_at: datetime = Field(
         ...,

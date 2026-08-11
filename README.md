@@ -1,35 +1,13 @@
-## Т1-2. Система извлечения ключевой информации из договоров
+# T1 Contract Intelligence
 
-веб-сервис, автоматизирующий перенос информации из договоров в реестр.
+Welcome to the **T1 Contract Intelligence** — a powerful service designed to extract important information from contracts and legal documents using AI.
 
+## Documentation
 
+- **[API Documentation](docs/API.md)** - Endpoints and usage
+- **[Deployment Guide](docs/DEPLOYMENT.md)** - Production setup
+- **[Legacy Information](docs/LEGACY.md)** - Legacy documentation
 
-Как запустить?
+---
 
-Сначала скачиваем uv, инструкция [здесь:](https://docs.astral.sh/uv/getting-started/installation/)
-
-Потом вводим следующие команды в терминале:
-
-```
-uv init
-uv sync
-```
-
-
-После этого загружаем датасет:
-
-```
-uv run make_dataset.py
-```
-
-Создаем бесплатный API ключ на openrouter и экспортируем его как переменную среды
-
-```
-$env:OPENROUTER_API_KEY="sk-or-v1-..."
-```
-
-Теперь можем запускать main.py
-
-```
-uv run main.py
-```
+> 🚀 **T1 Contract Intelligence**

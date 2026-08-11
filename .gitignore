@@ -8,7 +8,11 @@
 *__pycache__/*
 *.env
 *.txt
+!requirements.txt
 !frontend/package.json
 !frontend/package-lock.json
 dataset
 *.db
+.pytest_cache/
+tmp
+*.log

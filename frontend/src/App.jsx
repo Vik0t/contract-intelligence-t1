@@ -158,7 +158,6 @@ function App() {
     password: '',
   });
   const [file, setFile] = useState(null);
-  const templateId = '1';
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -229,11 +228,10 @@ function App() {
     setLoading(true);
     setError('');
     setResult(null);
-
+    
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('template_id', templateId);
 
       const upload = await request('/documents', {
         method: 'POST',

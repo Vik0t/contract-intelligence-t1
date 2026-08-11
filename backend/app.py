@@ -14,7 +14,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-engine = database.get_engine()
+engine = database.get_engine(os.getenv(
+    'DATABASE_URL',
+    'sqlite:///documents.db'
+))
 database.create_tables(engine)
 
 @app.get("/ping")
@@ -362,13 +365,13 @@ async def delete_current_user(authorization: str = Header(...)):
 )
 async def upload_document(
     file: UploadFile = File(...),
-    template_id: int = Form(...),
+    template_id: Optional[int] = Form(None),
     authorization: str = Header(...)
 ):
     """
     Upload a new document
     - file: PDF or DOCX file to upload
-    - template_id: ID of the template to use
+    - template_id: ID of the template to use (optional)
     Authentication token automatically extracted from Authorization header
     """
     if not authorization.startswith("Bearer "):
@@ -394,10 +397,15 @@ async def upload_document(
         
         db = database.get_session(engine)
         try:
+            if template_id is not None:
+                template = database.get_template(db, template_id=template_id)
+                if not template:
+                    raise HTTPException(status_code=400, detail=f"Template with id {template_id} not found")
+            
             document = database.create_document(
                 db,
                 owner=user.id,
-                template_id=template_id,
+                template_id=template_id,  # Can be None
                 filename=file.filename
             )
             
