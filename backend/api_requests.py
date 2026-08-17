@@ -333,6 +333,26 @@ class DocumentResponse(BaseModel):
         None,
         description="Template ID used for extraction (optional)"
     )
+    folder_id: Optional[int] = Field(
+        None,
+        description="Folder ID, or null for the root"
+    )
+    status: str = Field(
+        ...,
+        description="Current document processing status"
+    )
+    processing_error: Optional[str] = Field(
+        None,
+        description="Human-readable processing error, if any"
+    )
+    has_metadata: bool = Field(
+        False,
+        description="Whether metadata has been extracted"
+    )
+    has_file: bool = Field(
+        False,
+        description="Whether the original file is available"
+    )
     created_at: datetime = Field(
         ...,
         description="Document creation timestamp"
@@ -572,3 +592,31 @@ class StatsResponse(BaseModel):
         ...,
         description="Number of documents processed per day"
     )
+
+class FolderCreateRequest(BaseModel):
+    """Create a document folder."""
+    name: str = Field(..., min_length=1, max_length=120)
+
+class FolderUpdateRequest(BaseModel):
+    """Rename a document folder."""
+    name: str = Field(..., min_length=1, max_length=120)
+
+class FolderResponse(BaseModel):
+    """Document folder response."""
+    id: int
+    owner: int
+    name: str
+    document_count: int = 0
+    created_at: datetime
+
+class FolderListResponse(BaseModel):
+    """List of folders for the current user."""
+    folders: List[FolderResponse]
+
+class DocumentUpdateRequest(BaseModel):
+    """Update document placement."""
+    folder_id: Optional[int] = None
+
+class MetadataUpdateRequest(BaseModel):
+    """Manually edited document metadata."""
+    fields: Dict[str, Any] = Field(..., description="Complete editable metadata object")

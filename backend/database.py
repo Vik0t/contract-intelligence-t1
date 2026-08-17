@@ -1,4 +1,4 @@
-from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean
+from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -47,12 +47,23 @@ class Template(Base):
     fields = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=func.now())
 
+class Folder(Base):
+    __tablename__ = 'folders'
+    id = Column(Integer, primary_key=True)
+    owner = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    name = Column(String(120), nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
 class Document(Base):
     __tablename__ = 'documents'
     id = Column(Integer, primary_key=True)
     owner = Column(Integer, ForeignKey('users.id'))
     filename = Column(String(255))
     template_id = Column(Integer, ForeignKey('templates.id'), nullable=True)
+    folder_id = Column(Integer, ForeignKey('folders.id', ondelete='SET NULL'), nullable=True)
+    stored_path = Column(String(1024), nullable=True)
+    processing_status = Column(String(30), nullable=False, default='uploaded')
+    processing_error = Column(Text, nullable=True)
     contract_family = Column(String(255), nullable=True)
     is_scan = Column(Boolean, default=False)
     has_tables = Column(Boolean, default=False)
@@ -106,6 +117,18 @@ def get_engine(db_path='sqlite:///documents.db'):
 def create_tables(engine):
     """Create all database tables."""
     Base.metadata.create_all(engine)
+
+    # Add product fields to databases created by the previous API version.
+    columns = {column['name'] for column in inspect(engine).get_columns('documents')}
+    with engine.begin() as connection:
+        if 'folder_id' not in columns:
+            connection.execute(text('ALTER TABLE documents ADD COLUMN folder_id INTEGER'))
+        if 'stored_path' not in columns:
+            connection.execute(text('ALTER TABLE documents ADD COLUMN stored_path VARCHAR(1024)'))
+        if 'processing_status' not in columns:
+            connection.execute(text("ALTER TABLE documents ADD COLUMN processing_status VARCHAR(30) NOT NULL DEFAULT 'uploaded'"))
+        if 'processing_error' not in columns:
+            connection.execute(text('ALTER TABLE documents ADD COLUMN processing_error TEXT'))
 
 def get_session(engine):
     """Create and return a new database session."""
@@ -225,13 +248,16 @@ def delete_template(session, template_id):
 
 # ============ DOCUMENT OPERATIONS ============
 
-def create_document(session, owner, template_id, filename=None, contract_family=None, 
-                    is_scan=False, has_tables=False, language=None):
+def create_document(session, owner, template_id, filename=None, contract_family=None,
+                    is_scan=False, has_tables=False, language=None, stored_path=None,
+                    folder_id=None):
     """Create a new document."""
     doc = Document(
         owner=owner, 
         template_id=template_id, 
         filename=filename,
+        folder_id=folder_id,
+        stored_path=stored_path,
         contract_family=contract_family,
         is_scan=is_scan,
         has_tables=has_tables,
@@ -249,12 +275,52 @@ def get_documents_by_owner(session, owner_id):
     """Get all documents for a specific owner."""
     return session.query(Document).filter(Document.owner == owner_id).all()
 
-def get_documents_by_owner_paginated(session, owner_id, page=1, limit=50):
+def get_documents_by_owner_paginated(session, owner_id, page=1, limit=50,
+                                     folder_id=None, search=None):
     """Get paginated documents for a specific owner."""
     offset = (page - 1) * limit
-    total = session.query(Document).filter(Document.owner == owner_id).count()
-    documents = session.query(Document).filter(Document.owner == owner_id).order_by(Document.created_at.desc()).offset(offset).limit(limit).all()
+    query = session.query(Document).filter(Document.owner == owner_id)
+    if folder_id is not None:
+        query = query.filter(Document.folder_id == folder_id)
+    if search:
+        query = query.filter(Document.filename.ilike(f'%{search}%'))
+    total = query.count()
+    documents = query.order_by(Document.created_at.desc()).offset(offset).limit(limit).all()
     return documents, total
+
+def get_folders_by_owner(session, owner_id):
+    """Get folders owned by a user."""
+    return session.query(Folder).filter(Folder.owner == owner_id).order_by(Folder.name.asc()).all()
+
+def get_folder(session, folder_id):
+    """Get a folder by ID."""
+    return session.query(Folder).filter(Folder.id == folder_id).first()
+
+def create_folder(session, owner, name):
+    """Create a folder for a user."""
+    folder = Folder(owner=owner, name=name.strip())
+    session.add(folder)
+    session.commit()
+    return folder
+
+def update_folder(session, folder_id, name):
+    """Rename a folder."""
+    folder = get_folder(session, folder_id)
+    if folder:
+        folder.name = name.strip()
+        session.commit()
+    return folder
+
+def delete_folder(session, folder_id):
+    """Delete a folder and move its documents to the root."""
+    folder = get_folder(session, folder_id)
+    if folder:
+        session.query(Document).filter(Document.folder_id == folder_id).update(
+            {Document.folder_id: None}, synchronize_session=False
+        )
+        session.delete(folder)
+        session.commit()
+    return folder
 
 def get_documents_by_template(session, template_id):
     """Get all documents using a specific template."""
