@@ -10,7 +10,7 @@ import sys
 from typing import Any
 
 import torch
-from transformers import AutoModelForMultimodalLM, AutoProcessor
+from transformers import AutoModelForMultimodalLM, AutoProcessor, BitsAndBytesConfig
 
 from src.document_ir import DocumentIR
 from src.ocr import OCRBackend, TesseractOCRBackend
@@ -243,6 +243,67 @@ contract_date:
 - value также возвращай в формате YYYY-MM-DD.
 - Не используй даты приложений, оплат, платежей и регистрации.
 """.strip()
+
+
+class ExtractionStats:
+    """Token usage statistics for extraction operations."""
+
+    def __init__(self):
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+    def add_usage(self, prompt_tokens: int, completion_tokens: int):
+        """Add token usage from a single extraction."""
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += prompt_tokens + completion_tokens
+
+    def to_dict(self) -> dict:
+        """Convert stats to dictionary."""
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens
+        }
+
+
+# Global stats collector
+_stats_collector = ExtractionStats()
+
+
+def get_extraction_stats() -> dict:
+    """Get current extraction statistics."""
+    return _stats_collector.to_dict()
+
+
+def reset_extraction_stats():
+    """Reset extraction statistics."""
+    global _stats_collector
+    _stats_collector = ExtractionStats()
+
+
+def _count_tokens_mlx(tokenizer, text: str) -> int:
+    """Count tokens for MLX models."""
+    try:
+        return len(tokenizer.encode(text))
+    except:
+        # Fallback to approximate counting
+        return len(text.split())
+
+
+def _count_tokens_transformers(tokenizer_or_processor, text: str) -> int:
+    """Count tokens for transformer models."""
+    try:
+        if hasattr(tokenizer_or_processor, 'tokenizer'):
+            # It's a processor
+            return len(tokenizer_or_processor.tokenizer.encode(text))
+        else:
+            # It's a tokenizer
+            return len(tokenizer_or_processor.encode(text))
+    except:
+        # Fallback to approximate counting
+        return len(text.split())
 
 
 def build_messages(text: str) -> list[dict[str, Any]]:
@@ -671,6 +732,11 @@ def load_model() -> tuple[Any, Any]:
         return model, tokenizer
     
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+
+    quantization_config = BitsAndBytesConfig(
+        load_in_8bit=True,
+        llm_int8_threshold=6.0
+    )
     
     if torch.cuda.is_available():
         device = "cuda"
@@ -686,6 +752,7 @@ def load_model() -> tuple[Any, Any]:
         MODEL_ID,
         dtype=dtype,
         device_map=device,
+        quantization_config=quantization_config,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
     ).eval()
@@ -732,19 +799,23 @@ def extract_text_from_document(
 
 
 def extract_fields_from_text(
-    text: str,
-    document_ir: DocumentIR | None = None,
-    *,
-    thinking: bool = False,
-    max_new_tokens: int = 2048,
+        text: str,
+        document_ir: DocumentIR | None = None,
+        *,
+        thinking: bool = False,
+        max_new_tokens: int = 2048,
+        collect_stats: bool = True,
 ) -> dict[str, Any]:
     """Извлекает реквизиты из текста с помощью NuExtract3."""
     if max_new_tokens < 1:
         raise ValueError("max_new_tokens должен быть не меньше 1")
-    
+
+    prompt_tokens = 0
+    completion_tokens = 0
+
     if IS_MACOS and MLX_AVAILABLE:
         model, tokenizer = load_model()
-        
+
         messages = build_messages(text)
         prompt = tokenizer.apply_chat_template(
             messages,
@@ -754,16 +825,22 @@ def extract_fields_from_text(
             instructions=INSTRUCTIONS,
             enable_thinking=thinking,
         )
-        
+
+        # Count prompt tokens
+        prompt_tokens = _count_tokens_mlx(tokenizer, prompt)
+
         raw = generate(
             model,
             tokenizer,
             prompt=prompt,
             max_tokens=max_new_tokens
         )
-        
+
+        # Count completion tokens
+        completion_tokens = _count_tokens_mlx(tokenizer, raw)
+
         raw = raw.strip()
-        
+
         try:
             parsed = parse_json_output(raw)
         except Exception as exc:
@@ -772,86 +849,92 @@ def extract_fields_from_text(
             raise ValueError("Модель вернула JSON, но не объект")
 
         parsed = postprocess_extraction(parsed, text)
-        
-        if document_ir is not None:
-            return validate_extraction(parsed, document_ir)
-        return parsed
-    
-    processor, model = load_model()
-    messages = build_messages(text)
-    
-    device = model.device
-    
-    inputs = processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-        template=json.dumps(CONTRACT_TEMPLATE, ensure_ascii=False, indent=2),
-        instructions=INSTRUCTIONS,
-        enable_thinking=thinking,
-    )
-    
-    inputs = {k: v.to(device) for k, v in inputs.items()}
 
-    with torch.inference_mode():
-        generated_ids = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
+        if document_ir is not None:
+            parsed = validate_extraction(parsed, document_ir)
+    else:
+        processor, model = load_model()
+        messages = build_messages(text)
+
+        device = model.device
+
+        inputs = processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            template=json.dumps(CONTRACT_TEMPLATE, ensure_ascii=False, indent=2),
+            instructions=INSTRUCTIONS,
+            enable_thinking=thinking,
         )
 
-    generated_ids = generated_ids[:, inputs["input_ids"].shape[1] :]
-    raw = processor.batch_decode(
-        generated_ids,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
-    )[0].strip()
+        # Count prompt tokens
+        prompt_tokens = inputs["input_ids"].shape[1]
 
-    try:
-        parsed = parse_json_output(raw)
-    except Exception as exc:
-        raise ValueError(f"Модель вернула невалидный JSON: {raw}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("Модель вернула JSON, но не объект")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
 
-    parsed = postprocess_extraction(parsed, text)
-    
-    if document_ir is not None:
-        return validate_extraction(parsed, document_ir)
+        with torch.inference_mode():
+            generated_ids = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+            )
+
+        generated_ids = generated_ids[:, inputs["input_ids"].shape[1]:]
+
+        # Count completion tokens
+        completion_tokens = generated_ids.shape[1]
+
+        raw = processor.batch_decode(
+            generated_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0].strip()
+
+        try:
+            parsed = parse_json_output(raw)
+        except Exception as exc:
+            raise ValueError(f"Модель вернула невалидный JSON: {raw}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("Модель вернула JSON, но не объект")
+
+        parsed = postprocess_extraction(parsed, text)
+
+        if document_ir is not None:
+            parsed = validate_extraction(parsed, document_ir)
+
+    # Record stats if requested
+    if collect_stats:
+        _stats_collector.add_usage(prompt_tokens, completion_tokens)
+
     return parsed
 
 
 def extract_contract_key_data(
-    document: str | Path | DocumentIR | None = None,
-    text: str | None = None,
-    document_ir: DocumentIR | None = None,
-    *,
-    ocr_backend: OCRBackend | None = None,
-    ocr_dpi: int = 200,
-    start_page: int = 1,
-    max_pages: int | None = None,
-    thinking: bool = False,
-    max_new_tokens: int = 2048,
-) -> dict[str, Any]:
+        document: str | Path | DocumentIR | None = None,
+        text: str | None = None,
+        document_ir: DocumentIR | None = None,
+        *,
+        ocr_backend: OCRBackend | None = None,
+        ocr_dpi: int = 200,
+        start_page: int = 1,
+        max_pages: int | None = None,
+        thinking: bool = False,
+        max_new_tokens: int = 2048,
+        collect_stats: bool = True,
+) -> tuple[dict[str, Any], dict[str, int]]:
     """Извлекает реквизиты из PDF/DOCX или готового текста.
-    
-    Поддерживает два режима использования:
-    1. Передать document - будет выполнен OCR и извлечение
-    2. Передать text (и опционально document_ir) - только извлечение из готового текста
-    
-    Args:
-        document: Путь к PDF/DOCX или готовый DocumentIR
-        text: Уже извлеченный текст документа (для повторного использования)
-        document_ir: DocumentIR для валидации (опционально, требуется для page_number)
+
+    Returns:
+        tuple[dict, dict]: (extracted_data, token_usage)
     """
     if document is not None and text is not None:
         raise ValueError("Нельзя передавать одновременно document и text")
-    
+
     if document is None and text is None:
         raise ValueError("Необходимо передать либо document, либо text")
-    
+
     if document is not None:
         extracted_text, extracted_document_ir = extract_text_from_document(
             document,
@@ -860,16 +943,22 @@ def extract_contract_key_data(
             start_page=start_page,
             max_pages=max_pages,
         )
-        return extract_fields_from_text(
+        result = extract_fields_from_text(
             extracted_text,
             extracted_document_ir,
             thinking=thinking,
             max_new_tokens=max_new_tokens,
+            collect_stats=collect_stats,
         )
-    
-    return extract_fields_from_text(
-        text,
-        document_ir,
-        thinking=thinking,
-        max_new_tokens=max_new_tokens,
-    )
+    else:
+        result = extract_fields_from_text(
+            text,
+            document_ir,
+            thinking=thinking,
+            max_new_tokens=max_new_tokens,
+            collect_stats=collect_stats,
+        )
+
+    if collect_stats:
+        return result, _stats_collector.to_dict()
+    return result, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

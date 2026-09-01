@@ -558,7 +558,7 @@ class StatsResponse(BaseModel):
     )
     total_users: int = Field(
         ...,
-        description="Total number of registered users"
+        description="Total number of registered users (always 1 for user stats)"
     )
     total_parsed_documents: int = Field(
         ...,
