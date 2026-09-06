@@ -144,8 +144,26 @@ function MetadataEditor({ fields, onChange }) {
   })}</div>;
 }
 
-function SiteHeader({ user, onLogout }) {
-  return <header className="site-header"><a className="brand" href="#top" aria-label="Т1 — анализ договоров"><span className="brand-mark">+I</span><span className="brand-name">T1</span></a>{user && <div className="header-account"><span>{user.username}</span><button className="secondary-button" type="button" onClick={onLogout}>Выйти</button></div>}</header>;
+function SiteHeader({ user, onLogout, navigation }) {
+  return (
+    <header className="site-header">
+      <div className="header-left">
+        <a className="brand" href="#top" aria-label="Т1 — анализ договоров">
+          <span className="brand-mark">+I</span>
+          <span className="brand-name">T1</span>
+        </a>
+        {navigation}
+      </div>
+      {user && (
+        <div className="header-account">
+          <span>{user.username}</span>
+          <button className="secondary-button" type="button" onClick={onLogout}>
+            Выйти
+          </button>
+        </div>
+      )}
+    </header>
+  );
 }
 
 function AuthView({ authMode, authForm, loading, error, onChange, onSubmit, onToggle }) {
@@ -172,6 +190,146 @@ function DocumentDetail({ document, onClose, onOpenFile, onAnalyze, onSaveMetada
   return <section className="document-detail"><div className="detail-header"><div><p className="eyebrow">Результат анализа</p><h2>{document.filename || 'Документ'}</h2><p className="muted">Загружен {formatDate(document.created_at)}</p></div><div className="detail-actions">{document.has_file && <button className="secondary-button" type="button" onClick={() => onOpenFile(document)}>Открыть файл</button>}{hasMetadata && !editing && <button className="secondary-button" type="button" onClick={() => setEditing(true)}>Редактировать поля</button>}{editing && <><button className="secondary-button" type="button" onClick={() => { setEditing(false); setDraftFields(cloneFields(document.metadata?.fields)); }}>Отменить</button><button className="primary-button compact-button" type="button" onClick={saveMetadata} disabled={saving}>{saving ? 'Сохраняем…' : 'Сохранить поля'}</button></>}<button className="close-button" type="button" onClick={onClose}>Закрыть</button></div></div>{hasMetadata ? (editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : <MetadataList fields={document.metadata.fields} />) : <div className="detail-state"><strong>{document.status === 'processing' ? 'Документ обрабатывается' : document.status === 'failed' ? 'Не удалось обработать документ' : 'Документ готов к анализу'}</strong><span>{document.processing_error || (document.status === 'processing' ? 'Можно закрыть это окно — статус обновится автоматически.' : 'Запустите анализ, чтобы извлечь реквизиты договора.')}</span>{canStartAnalysis && <button className="primary-button" type="button" onClick={() => onAnalyze(document)}>{document.status === 'failed' ? 'Повторить анализ' : 'Проанализировать документ'}</button>}</div>}</section>;
 }
 
+function StatsPage({ token, onBack }) {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [periodDays, setPeriodDays] = useState(30);
+
+  const loadStats = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    try {
+      const data = await request(`/stats?period_days=${periodDays}`, {
+        headers: authHeaders(token),
+      });
+      setStats(data);
+      setError('');
+    } catch (requestError) {
+      setError(friendlyError(requestError));
+    } finally {
+      setLoading(false);
+    }
+  }, [periodDays, token]);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  const formatNumber = (num) => {
+    if (num === null || num === undefined) return '0';
+    return new Intl.NumberFormat('ru-RU').format(num);
+  };
+
+  const formatTime = (seconds) => {
+    if (!seconds) return '0.00 с';
+    return `${seconds.toFixed(2)} с`;
+  };
+
+  const renderDocumentsPerDay = () => {
+    if (!stats?.documents_per_day) return null;
+    const entries = Object.entries(stats.documents_per_day).sort(([a], [b]) => a.localeCompare(b));
+    if (!entries.length) return <p className="muted">Нет данных за выбранный период</p>;
+
+    const maxValue = Math.max(...entries.map(([, value]) => value));
+
+    return (
+      <div className="stats-chart">
+        {entries.map(([date, count]) => (
+          <div key={date} className="chart-column">
+            <div className="chart-bar-wrap">
+              <div
+                className="chart-bar"
+                style={{ height: `${(count / maxValue) * 100}%` }}
+                title={`${date}: ${count} документов`}
+              >
+                <span className="chart-value">{count}</span>
+              </div>
+            </div>
+            <span className="chart-label">{date.slice(5)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <section className="stats-page">
+      <header className="stats-header">
+        <div>
+          <button className="link-button back-button" type="button" onClick={onBack}>
+            ← Назад к документам
+          </button>
+          <p className="eyebrow">Т1 / Статистика</p>
+          <h1>Моя статистика</h1>
+          <p className="muted">Показатели использования и обработки ваших документов</p>
+        </div>
+        <div className="period-selector">
+          <label htmlFor="period-days">Период:</label>
+          <select
+            id="period-days"
+            value={periodDays}
+            onChange={(e) => setPeriodDays(Number(e.target.value))}
+          >
+            <option value={7}>7 дней</option>
+            <option value={30}>30 дней</option>
+            <option value={90}>90 дней</option>
+            <option value={365}>Год</option>
+          </select>
+        </div>
+      </header>
+
+      {error && <p className="error">{error}</p>}
+
+      {loading ? (
+        <div className="empty-state">Загружаем статистику…</div>
+      ) : stats ? (
+        <div className="stats-content">
+          <div className="stats-grid">
+            <div className="stat-card">
+              <div className="stat-label">Всего документов</div>
+              <div className="stat-value">{formatNumber(stats.total_documents)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Обработано документов</div>
+              <div className="stat-value">{formatNumber(stats.total_parsed_documents)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Извлечений метаданных</div>
+              <div className="stat-value">{formatNumber(stats.total_metadata_extractions)}</div>
+            </div>
+            <div className="stat-card highlight">
+              <div className="stat-label">Потрачено токенов</div>
+              <div className="stat-value">{formatNumber(stats.total_tokens_used)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Среднее время парсинга</div>
+              <div className="stat-value">{formatTime(stats.average_parsing_time)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Среднее время извлечения</div>
+              <div className="stat-value">{formatTime(stats.average_extraction_time)}</div>
+            </div>
+          </div>
+
+          <div className="stats-section">
+            <h2>Документы по дням</h2>
+            <p className="muted">
+              Период: {new Date(stats.period_start).toLocaleDateString('ru-RU')} — {new Date(stats.period_end).toLocaleDateString('ru-RU')}
+            </p>
+            {renderDocumentsPerDay()}
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state">
+          <strong>Статистика недоступна</strong>
+          <span>Не удалось загрузить данные. Попробуйте позже.</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('contract_token'));
   const [user, setUser] = useState(getSavedUser);
@@ -190,6 +348,7 @@ function App() {
   const [showFolderForm, setShowFolderForm] = useState(false);
   const [draggedDocumentId, setDraggedDocumentId] = useState(null);
   const [error, setError] = useState('');
+  const [currentPage, setCurrentPage] = useState('library'); // 'library' | 'stats'
 
   const clearSession = useCallback(() => { localStorage.removeItem('contract_token'); localStorage.removeItem('contract_user'); setToken(null); setUser(null); setSelectedDocument(null); }, []);
   const logout = useCallback(async () => { try { if (token) await request('/auth/logout', { method: 'POST', body: JSON.stringify({ session_token: token }) }); } catch { /* Local session is still cleared. */ } clearSession(); }, [clearSession, token]);
@@ -208,6 +367,7 @@ function App() {
       else { setFolders([]); setError('Не удалось загрузить папки. Документы доступны в общем списке.'); }
     } catch (requestError) { if (requestError.status === 401) clearSession(); setError(friendlyError(requestError)); } finally { setLibraryLoading(false); }
   }, [clearSession, search, selectedFolderId, token]);
+
   useEffect(() => { loadLibrary(); }, [loadLibrary]);
   useEffect(() => { if (!token || !documents.some((document) => document.status === 'processing')) return undefined; const intervalId = window.setInterval(loadLibrary, 2500); return () => window.clearInterval(intervalId); }, [documents, loadLibrary, token]);
   useEffect(() => { if (!token || !selectedDocument) return; const summary = documents.find((document) => document.id === selectedDocument.id); if (!summary || (summary.status === selectedDocument.status && summary.has_metadata === selectedDocument.has_metadata)) return; request(`/documents/${selectedDocument.id}`, { headers: authHeaders(token) }).then(setSelectedDocument).catch((requestError) => { if (requestError.status === 401) clearSession(); }); }, [clearSession, documents, selectedDocument, token]);
@@ -225,8 +385,75 @@ function App() {
   const deleteDocument = async (document) => { if (!window.confirm(`Удалить «${document.filename}»?`)) return; try { await request(`/documents/${document.id}`, { method: 'DELETE', headers: authHeaders(token) }); if (selectedDocument?.id === document.id) setSelectedDocument(null); await loadLibrary(); } catch (requestError) { setError(friendlyError(requestError)); } };
 
   if (!token) return <main className="page-shell" id="top"><SiteHeader /><AuthView authMode={authMode} authForm={authForm} loading={authLoading} error={error} onChange={updateAuthField} onSubmit={handleAuth} onToggle={() => { setAuthMode((mode) => mode === 'login' ? 'register' : 'login'); setError(''); }} /></main>;
+
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId);
-  return <main className="page-shell" id="top"><SiteHeader user={user} onLogout={logout} /><section className="product-shell"><header className="product-heading"><div><p className="eyebrow">Т1 / Анализ договоров</p><h1>Мои документы</h1><p className="muted">Храните договоры, раскладывайте их по папкам и возвращайтесь к результатам анализа.</p></div><label className="primary-button upload-trigger">{uploading ? 'Подготавливаем…' : 'Загрузить договор'}<input type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={handleUpload} disabled={uploading} /></label></header>{error && <p className="error">{error}</p>}<div className="library-layout"><aside className="folder-sidebar"><div className="sidebar-heading"><h2>Папки</h2><button className="add-folder-button" type="button" onClick={() => setShowFolderForm((current) => !current)} aria-label="Создать папку">+</button></div><FolderItem active={selectedFolderId === null} label="Все документы" count={totalDocuments} onClick={() => setSelectedFolderId(null)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (draggedDocumentId) moveDocument(draggedDocumentId, null); }} /><div className="folder-list">{folders.map((folder) => <FolderItem key={folder.id} active={selectedFolderId === folder.id} label={folder.name} count={folder.document_count} onClick={() => setSelectedFolderId(folder.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (draggedDocumentId) moveDocument(draggedDocumentId, folder.id); }} onDelete={() => deleteFolder(folder)} canDelete />)}</div>{showFolderForm && <form className="folder-form" onSubmit={createFolder}><input autoFocus value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="Название папки" maxLength={120} /><button className="primary-button" type="submit">Создать</button></form>}<p className="drop-hint">Перетащите документ на папку, чтобы переместить его.</p></aside><section className="library-content"><div className="list-heading"><div><h2>{selectedFolder?.name ?? 'Все документы'}</h2><span className="list-count">{totalDocuments} документов</span></div><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти документ" aria-label="Найти документ" /></div>{libraryLoading ? <div className="empty-state">Загружаем документы…</div> : documents.length ? <div className="document-list"><div className="document-list-head"><span>Документ</span><span>Статус</span><span>Действия</span></div>{documents.map((document) => <DocumentRow key={document.id} document={document} selected={selectedDocument?.id === document.id} onOpen={openDocument} onOpenFile={openOriginalFile} onDelete={deleteDocument} onAnalyze={analyzeDocument} onDragStart={setDraggedDocumentId} />)}</div> : <div className="empty-state"><strong>{search ? 'Ничего не найдено' : 'В этой папке пока нет документов'}</strong><span>{search ? 'Попробуйте изменить запрос.' : 'Загрузите первый договор, и он появится здесь.'}</span></div>}{selectedDocument && <DocumentDetail document={selectedDocument} onClose={() => setSelectedDocument(null)} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} />}</section></div></section></main>;
+  const headerNavigation = (
+    <nav className="header-nav">
+      <button
+        className={`nav-button ${currentPage === 'library' ? 'is-active' : ''}`}
+        type="button"
+        onClick={() => setCurrentPage('library')}
+      >
+        Документы
+      </button>
+      <button
+        className={`nav-button ${currentPage === 'stats' ? 'is-active' : ''}`}
+        type="button"
+        onClick={() => setCurrentPage('stats')}
+      >
+        Статистика
+      </button>
+    </nav>
+  );
+
+  return (
+    <main className="page-shell" id="top">
+      <SiteHeader user={user} onLogout={logout} navigation={headerNavigation} />
+      {currentPage === 'stats' ? (
+        <StatsPage token={token} onBack={() => setCurrentPage('library')} />
+      ) : (
+        <section className="product-shell">
+          <header className="product-heading">
+            <div>
+              <p className="eyebrow">Т1 / Анализ договоров</p>
+              <h1>Мои документы</h1>
+              <p className="muted">Храните договоры, раскладывайте их по папкам и возвращайтесь к результатам анализа.</p>
+            </div>
+            <label className="primary-button upload-trigger">
+              {uploading ? 'Подготавливаем…' : 'Загрузить договор'}
+              <input type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={handleUpload} disabled={uploading} />
+            </label>
+          </header>
+          {error && <p className="error">{error}</p>}
+          <div className="library-layout">
+            <aside className="folder-sidebar">
+              <div className="sidebar-heading">
+                <h2>Папки</h2>
+                <button className="add-folder-button" type="button" onClick={() => setShowFolderForm((current) => !current)} aria-label="Создать папку">+</button>
+              </div>
+              <FolderItem active={selectedFolderId === null} label="Все документы" count={totalDocuments} onClick={() => setSelectedFolderId(null)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (draggedDocumentId) moveDocument(draggedDocumentId, null); }} />
+              <div className="folder-list">
+                {folders.map((folder) => <FolderItem key={folder.id} active={selectedFolderId === folder.id} label={folder.name} count={folder.document_count} onClick={() => setSelectedFolderId(folder.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (draggedDocumentId) moveDocument(draggedDocumentId, folder.id); }} onDelete={() => deleteFolder(folder)} canDelete />)}
+              </div>
+              {showFolderForm && <form className="folder-form" onSubmit={createFolder}><input autoFocus value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="Название папки" maxLength={120} /><button className="primary-button" type="submit">Создать</button></form>}
+              <p className="drop-hint">Перетащите документ на папку, чтобы переместить его.</p>
+            </aside>
+            <section className="library-content">
+              <div className="list-heading">
+                <div>
+                  <h2>{selectedFolder?.name ?? 'Все документы'}</h2>
+                  <span className="list-count">{totalDocuments} документов</span>
+                </div>
+                <input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти документ" aria-label="Найти документ" />
+              </div>
+              {libraryLoading ? <div className="empty-state">Загружаем документы…</div> : documents.length ? <div className="document-list"><div className="document-list-head"><span>Документ</span><span>Статус</span><span>Действия</span></div>{documents.map((document) => <DocumentRow key={document.id} document={document} selected={selectedDocument?.id === document.id} onOpen={openDocument} onOpenFile={openOriginalFile} onDelete={deleteDocument} onAnalyze={analyzeDocument} onDragStart={setDraggedDocumentId} />)}</div> : <div className="empty-state"><strong>{search ? 'Ничего не найдено' : 'В этой папке пока нет документов'}</strong><span>{search ? 'Попробуйте изменить запрос.' : 'Загрузите первый договор, и он появится здесь.'}</span></div>}
+              {selectedDocument && <DocumentDetail document={selectedDocument} onClose={() => setSelectedDocument(null)} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} />}
+            </section>
+          </div>
+        </section>
+      )}
+    </main>
+  );
 }
 
 export default App;

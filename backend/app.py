@@ -1,3 +1,5 @@
+import logging
+import traceback
 from datetime import datetime, timedelta
 import mimetypes
 import os
@@ -148,22 +150,33 @@ def create_metadata_response(metadata):
         created_at=metadata.created_at
     )
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 def process_document_parsing(document_id: int):
     """Parse an uploaded file outside the upload request."""
     db = database.get_session(engine)
     try:
         document = database.get_document(db, document_id)
         if not document or not document.stored_path:
+            logger.error(f"Document {document_id} not found or no stored path")
             return
         stored_path = document.stored_path
+        logger.info(f"Starting to parse document {document_id}: {stored_path}")
 
         try:
             with PROCESSING_LOCK:
                 started_at = datetime.now()
+                logger.info(f"Calling extract_text_from_document for {document_id}")
                 parsed_text, document_ir = extract_text_from_document(stored_path)
                 parsing_time = (datetime.now() - started_at).total_seconds()
+                logger.info(f"Document {document_id} parsed successfully in {parsing_time:.2f}s. Text length: {len(parsed_text)}")
 
             if database.get_document(db, document_id) is None:
+                logger.warning(f"Document {document_id} was deleted during parsing")
                 try_remove_file(stored_path)
                 return
 
@@ -174,6 +187,7 @@ def process_document_parsing(document_id: int):
                 text=parsed_text,
                 document_ir=document_ir_dict
             )
+            logger.info(f"Parsed document {document_id} saved to database")
 
             existing_stats = database.get_stats(db, document_id=document_id)
             if existing_stats:
@@ -195,18 +209,25 @@ def process_document_parsing(document_id: int):
                 processing_status='ready',
                 processing_error=None
             )
-        except Exception:
+            logger.info(f"Document {document_id} status updated to 'ready'")
+        except Exception as e:
+            logger.error(f"Error parsing document {document_id}: {str(e)}")
+            logger.error(traceback.format_exc())
             if database.get_document(db, document_id) is not None:
                 database.update_document(
                     db,
                     document_id,
                     processing_status='failed',
-                    processing_error='Не удалось подготовить документ к анализу.'
+                    processing_error=f'Не удалось подготовить документ к анализу: {str(e)}'
                 )
             else:
                 try_remove_file(stored_path)
+    except Exception as e:
+        logger.error(f"Critical error in process_document_parsing for {document_id}: {str(e)}")
+        logger.error(traceback.format_exc())
     finally:
         db.close()
+
 
 def process_metadata_extraction(document_id: int):
     """Run the GPU extraction job and persist its result."""
@@ -215,24 +236,36 @@ def process_metadata_extraction(document_id: int):
         document = database.get_document(db, document_id)
         parsed_doc = database.get_parsed_document(db, document_id)
         if not document or not parsed_doc:
+            logger.error(f"Document {document_id} or parsed document not found")
             return
+        logger.info(f"Starting metadata extraction for document {document_id}")
 
         try:
             document_ir = None
             if parsed_doc.document_ir:
                 from src.document_ir import DocumentIR
                 document_ir = DocumentIR.model_validate(parsed_doc.document_ir)
+                logger.info(f"DocumentIR loaded for {document_id}")
 
             with PROCESSING_LOCK:
                 started_at = datetime.now()
-                extracted_data = extract_contract_key_data(
+                logger.info(f"Calling extract_contract_key_data for {document_id}")
+
+                # Reset stats before extraction
+                from src.local_extraction import reset_extraction_stats
+                reset_extraction_stats()
+
+                extracted_data, token_usage = extract_contract_key_data(
                     text=parsed_doc.text,
                     document_ir=document_ir,
-                    max_new_tokens=4096
+                    max_new_tokens=4096,
+                    collect_stats=True
                 )
                 extraction_time = (datetime.now() - started_at).total_seconds()
+                logger.info(f"Extraction completed in {extraction_time:.2f}s. Tokens: {token_usage}")
 
             if database.get_document(db, document_id) is None:
+                logger.warning(f"Document {document_id} was deleted during extraction")
                 return
 
             metadata = database.update_metadata(
@@ -240,18 +273,20 @@ def process_metadata_extraction(document_id: int):
                 document_id=document_id,
                 fields=extracted_data
             )
+            logger.info(f"Metadata saved for document {document_id}")
 
             existing_stats = database.get_stats(db, document_id=document_id)
             if existing_stats:
                 latest_stat = existing_stats[-1]
-                completion_tokens = len(str(extracted_data).split())
                 database.update_stats(
                     db,
                     latest_stat.id,
                     extracting_time=extraction_time,
-                    completion_tokens=(latest_stat.completion_tokens or 0) + completion_tokens,
-                    total_tokens=(latest_stat.total_tokens or 0) + completion_tokens
+                    prompt_tokens=(latest_stat.prompt_tokens or 0) + token_usage["prompt_tokens"],
+                    completion_tokens=(latest_stat.completion_tokens or 0) + token_usage["completion_tokens"],
+                    total_tokens=(latest_stat.total_tokens or 0) + token_usage["total_tokens"]
                 )
+                logger.info(f"Stats updated for document {document_id}")
 
             database.update_document(
                 db,
@@ -259,14 +294,20 @@ def process_metadata_extraction(document_id: int):
                 processing_status='extracted',
                 processing_error=None
             )
-        except Exception:
+            logger.info(f"Document {document_id} status updated to 'extracted'")
+        except Exception as e:
+            logger.error(f"Error extracting metadata for document {document_id}: {str(e)}")
+            logger.error(traceback.format_exc())
             if database.get_document(db, document_id) is not None:
                 database.update_document(
                     db,
                     document_id,
                     processing_status='failed',
-                    processing_error='Не удалось извлечь реквизиты. Попробуйте запустить анализ ещё раз.'
+                    processing_error=f'Не удалось извлечь реквизиты: {str(e)}'
                 )
+    except Exception as e:
+        logger.error(f"Critical error in process_metadata_extraction for {document_id}: {str(e)}")
+        logger.error(traceback.format_exc())
     finally:
         db.close()
 
@@ -844,6 +885,7 @@ async def update_document_metadata(
     finally:
         db.close()
 
+
 @app.post(
     "/documents/{document_id}/metadata",
     response_model=api_requests.MetadataExtractResponse,
@@ -851,8 +893,8 @@ async def update_document_metadata(
     description="Extract metadata to a document"
 )
 async def extract_metadata(
-    document_id: int,
-    authorization: str = Header(...)
+        document_id: int,
+        authorization: str = Header(...)
 ):
     """
     Extract metadata from the document
@@ -867,13 +909,13 @@ async def extract_metadata(
         document = database.get_document(db, document_id=document_id)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         verify_document_ownership(user, document)
-        
+
         parsed_doc = database.get_parsed_document(db, document_id)
         if not parsed_doc:
             raise HTTPException(status_code=400, detail="Document has not been parsed yet")
-        
+
         document_ir = None
         if parsed_doc.document_ir:
             from src.document_ir import DocumentIR
@@ -881,10 +923,15 @@ async def extract_metadata(
 
         start_time = datetime.now()
         try:
-            extracted_data = extract_contract_key_data(
+            # Reset stats before extraction
+            from src.local_extraction import reset_extraction_stats
+            reset_extraction_stats()
+
+            extracted_data, token_usage = extract_contract_key_data(
                 text=parsed_doc.text,
                 document_ir=document_ir,
-                max_new_tokens=4096  # Increased from default 2048
+                max_new_tokens=4096,
+                collect_stats=True
             )
         except ValueError as e:
             raise HTTPException(
@@ -896,9 +943,9 @@ async def extract_metadata(
                 status_code=500,
                 detail=f"Failed to extract metadata: {str(e)}"
             )
-        
+
         extraction_time = (datetime.now() - start_time).total_seconds()
-        
+
         metadata = database.create_metadata(db, document_id=document_id, fields=extracted_data)
         database.update_document(
             db,
@@ -906,7 +953,7 @@ async def extract_metadata(
             processing_status='extracted',
             processing_error=None
         )
-        
+
         existing_stats = database.get_stats(db, document_id=document_id)
         if existing_stats:
             latest_stat = existing_stats[-1] if isinstance(existing_stats, list) else existing_stats
@@ -914,10 +961,11 @@ async def extract_metadata(
                 db,
                 latest_stat.id,
                 extracting_time=extraction_time,
-                completion_tokens=(latest_stat.completion_tokens or 0) + len(str(extracted_data).split()),
-                total_tokens=(latest_stat.total_tokens or 0) + len(str(extracted_data).split())
+                prompt_tokens=(latest_stat.prompt_tokens or 0) + token_usage["prompt_tokens"],
+                completion_tokens=(latest_stat.completion_tokens or 0) + token_usage["completion_tokens"],
+                total_tokens=(latest_stat.total_tokens or 0) + token_usage["total_tokens"]
             )
-        
+
         return api_requests.MetadataExtractResponse(
             success=True,
             message="Metadata extracted successfully",
@@ -933,47 +981,78 @@ async def extract_metadata(
     "/stats",
     response_model=api_requests.StatsResponse,
     summary="Get statistics",
-    description="Get extraction statistics (admin only)"
+    description="Get extraction statistics for the current user"
 )
 async def get_stats(
-    period_days: Optional[int] = 30,
-    authorization: str = Header(...)
+        period_days: Optional[int] = 30,
+        authorization: str = Header(...)
 ):
     """
-    Get extraction stats for admins
+    Get extraction stats for the current user
     - period_days: Number of days to include in stats (default 30)
     Includes token usage, document processing metrics, etc.
     """
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authentication scheme")
     token = authorization.replace("Bearer ", "")
-    _, db = get_admin_from_token(token)
+    user, db = get_user_from_token(token)
     try:
         period_days = period_days or 30
         end_date = datetime.now()
         start_date = end_date - timedelta(days=period_days)
-        
-        documents = database.get_documents_by_period(db, start_date, end_date)
-        stats = database.get_stats_by_period(db, start_date, end_date)
-        metadata = database.get_metadata_by_period(db, start_date, end_date)
-        parsed_docs = database.get_parsed_documents_by_period(db, start_date, end_date)
-        
+
+        # Get user's documents
+        documents = db.query(database.Document).filter(
+            database.Document.owner == user.id,
+            database.Document.created_at >= start_date,
+            database.Document.created_at <= end_date
+        ).all()
+
+        # Get stats for user's documents
+        document_ids = [doc.id for doc in documents]
+        stats = []
+        if document_ids:
+            stats = db.query(database.Stats).filter(
+                database.Stats.document_id.in_(document_ids),
+                database.Stats.created_at >= start_date,
+                database.Stats.created_at <= end_date
+            ).all()
+
+        # Get metadata for user's documents
+        metadata = []
+        if document_ids:
+            metadata = db.query(database.DocumentMetadata).filter(
+                database.DocumentMetadata.document_id.in_(document_ids),
+                database.DocumentMetadata.created_at >= start_date,
+                database.DocumentMetadata.created_at <= end_date
+            ).all()
+
+        # Get parsed documents for user
+        parsed_docs = []
+        if document_ids:
+            parsed_docs = db.query(database.ParsedDocument).filter(
+                database.ParsedDocument.document_id.in_(document_ids),
+                database.ParsedDocument.created_at >= start_date,
+                database.ParsedDocument.created_at <= end_date
+            ).all()
+
         parsing_times = [s.parsing_time for s in stats if s.parsing_time]
         extraction_times = [s.extracting_time for s in stats if s.extracting_time]
-        
+
         documents_per_day = {}
         for doc in documents:
             day_key = doc.created_at.strftime("%Y-%m-%d")
             documents_per_day[day_key] = documents_per_day.get(day_key, 0) + 1
-        
+
         return api_requests.StatsResponse(
             total_documents=len(documents),
-            total_users=len(database.get_all_users(db)),
+            total_users=1,  # Just this user
             total_parsed_documents=len(parsed_docs),
             total_metadata_extractions=len(metadata),
-            total_tokens_used=sum(s.total_tokens for s in stats) if stats else 0,
+            total_tokens_used=sum(s.total_tokens or 0 for s in stats),
             average_parsing_time=round(sum(parsing_times) / len(parsing_times), 2) if parsing_times else 0.0,
-            average_extraction_time=round(sum(extraction_times) / len(extraction_times), 2) if extraction_times else 0.0,
+            average_extraction_time=round(sum(extraction_times) / len(extraction_times),
+                                          2) if extraction_times else 0.0,
             period_start=start_date,
             period_end=end_date,
             documents_per_day=documents_per_day
