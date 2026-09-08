@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from datetime import date
 from functools import lru_cache
+import logging
 import json
+import os
 from pathlib import Path
 import re
 import platform
 import sys
 from typing import Any
 
+from dotenv import load_dotenv
 import torch
 from transformers import AutoModelForMultimodalLM, AutoProcessor, BitsAndBytesConfig
 
@@ -17,6 +20,11 @@ from src.ocr import OCRBackend, TesseractOCRBackend
 from src.parsing import document_ir_to_text, parse_document
 
 MODEL_ID = "numind/NuExtract3"
+MODEL_QUANTIZATION_ENV = "CONTRACT_MODEL_QUANTIZATION"
+DEFAULT_MODEL_QUANTIZATION = "bf16"
+
+load_dotenv()
+logger = logging.getLogger(__name__)
 
 CONTRACT_TYPE_LABELS = [
     "Договор займа",
@@ -733,29 +741,70 @@ def load_model() -> tuple[Any, Any]:
     
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 
-    quantization_config = BitsAndBytesConfig(
-        load_in_8bit=True,
-        llm_int8_threshold=6.0
-    )
-    
     if torch.cuda.is_available():
         device = "cuda"
-        dtype = torch.bfloat16
     elif torch.backends.mps.is_available() and not IS_MACOS:
         device = "mps"
-        dtype = torch.float32
     else:
         device = "cpu"
+
+    requested_mode = os.getenv(MODEL_QUANTIZATION_ENV, DEFAULT_MODEL_QUANTIZATION).strip().lower()
+    if requested_mode not in {"bf16", "8bit"}:
+        raise ValueError(
+            f"{MODEL_QUANTIZATION_ENV} must be 'bf16' or '8bit', got {requested_mode!r}"
+        )
+
+    if device == "cuda" and requested_mode == "bf16" and torch.cuda.is_bf16_supported():
+        effective_mode = "bf16"
+        dtype = torch.bfloat16
+    elif device == "cuda":
+        effective_mode = "8bit"
+        dtype = torch.float16
+        if requested_mode == "bf16":
+            logger.warning("BF16 is unavailable on this CUDA device; falling back to 8-bit.")
+    else:
+        effective_mode = "full"
         dtype = torch.float32
-    
-    model = AutoModelForMultimodalLM.from_pretrained(
+        if requested_mode == "8bit":
+            logger.warning("8-bit quantization is only enabled for CUDA; using full precision on %s.", device)
+
+    model_kwargs = {
+        "dtype": dtype,
+        "device_map": device,
+        "trust_remote_code": True,
+        "low_cpu_mem_usage": True,
+    }
+    if effective_mode == "8bit":
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_threshold=6.0,
+        )
+
+    logger.info(
+        "Loading %s with mode=%s, device=%s, dtype=%s",
         MODEL_ID,
-        dtype=dtype,
-        device_map=device,
-        quantization_config=quantization_config,
-        trust_remote_code=True,
-        low_cpu_mem_usage=True,
-    ).eval()
+        effective_mode,
+        device,
+        dtype,
+    )
+    try:
+        model = AutoModelForMultimodalLM.from_pretrained(MODEL_ID, **model_kwargs).eval()
+    except (RuntimeError, TypeError, ValueError, OSError):
+        if effective_mode != "bf16" or device != "cuda":
+            raise
+        logger.exception("BF16 model loading failed; retrying with 8-bit CUDA quantization.")
+        torch.cuda.empty_cache()
+        fallback_kwargs = {
+            "dtype": torch.float16,
+            "device_map": device,
+            "quantization_config": BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_threshold=6.0,
+            ),
+            "trust_remote_code": True,
+            "low_cpu_mem_usage": True,
+        }
+        model = AutoModelForMultimodalLM.from_pretrained(MODEL_ID, **fallback_kwargs).eval()
     return processor, model
 
 

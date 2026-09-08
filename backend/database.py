@@ -1,6 +1,5 @@
-from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean, inspect, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean, Index, inspect, text
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
 from datetime import datetime, timedelta
 import secrets
@@ -57,7 +56,7 @@ class Folder(Base):
 class Document(Base):
     __tablename__ = 'documents'
     id = Column(Integer, primary_key=True)
-    owner = Column(Integer, ForeignKey('users.id'))
+    owner = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     filename = Column(String(255))
     template_id = Column(Integer, ForeignKey('templates.id'), nullable=True)
     folder_id = Column(Integer, ForeignKey('folders.id', ondelete='SET NULL'), nullable=True)
@@ -98,11 +97,36 @@ class ParsedDocument(Base):
     document_ir = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
+
+class ProcessingJob(Base):
+    __tablename__ = 'processing_jobs'
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), nullable=False)
+    kind = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default='queued')
+    active_key = Column(String(120), nullable=True, unique=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    error = Column(Text, nullable=True)
+    available_at = Column(DateTime, default=func.now())
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index('ix_processing_jobs_status_available', 'status', 'available_at'),
+        Index('ix_processing_jobs_document_kind', 'document_id', 'kind'),
+    )
+
 # ============ ENGINE & SESSION ============
 
 def get_engine(db_path='sqlite:///documents.db'):
     """Create and return SQLAlchemy engine."""
-    engine = create_engine(db_path, echo=False)
+    engine_kwargs = {"echo": False, "pool_pre_ping": True}
+    if 'sqlite' in db_path:
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    engine = create_engine(db_path, **engine_kwargs)
     
     if 'sqlite' in db_path:
         from sqlalchemy import event
@@ -170,10 +194,34 @@ def update_user(session, user_id, **kwargs):
     return user
 
 def delete_user(session, user_id):
-    """Delete a user and their sessions."""
+    """Delete a user and all database-owned data belonging to them."""
     user = get_user(session, user_id=user_id)
     if user:
         session.query(Session).filter(Session.user_id == user_id).delete()
+        document_ids = [
+            document.id
+            for document in session.query(Document).filter(Document.owner == user_id).all()
+        ]
+        if document_ids:
+            session.query(Stats).filter(Stats.document_id.in_(document_ids)).update(
+                {Stats.document_id: None},
+                synchronize_session=False,
+            )
+            session.query(ProcessingJob).filter(
+                ProcessingJob.document_id.in_(document_ids)
+            ).delete(synchronize_session=False)
+            session.query(ParsedDocument).filter(
+                ParsedDocument.document_id.in_(document_ids)
+            ).delete(synchronize_session=False)
+            session.query(DocumentMetadata).filter(
+                DocumentMetadata.document_id.in_(document_ids)
+            ).delete(synchronize_session=False)
+            session.query(Document).filter(Document.id.in_(document_ids)).delete(
+                synchronize_session=False
+            )
+        session.query(Folder).filter(Folder.owner == user_id).delete(
+            synchronize_session=False
+        )
         session.delete(user)
         session.commit()
     return user
@@ -358,6 +406,9 @@ def delete_document(session, document_id):
     """Delete a document and all related data."""
     doc = get_document(session, document_id)
     if doc:
+        session.query(ProcessingJob).filter(
+            ProcessingJob.document_id == document_id
+        ).delete(synchronize_session=False)
         session.query(ParsedDocument).filter(ParsedDocument.document_id == document_id).delete()
         session.query(DocumentMetadata).filter(DocumentMetadata.document_id == document_id).delete()
         session.delete(doc)
@@ -516,3 +567,74 @@ def delete_parsed_document_by_id(session, parsed_id):
         session.delete(parsed)
         session.commit()
     return parsed
+
+
+# ============ PROCESSING JOB OPERATIONS ============
+
+def get_job(session, job_id):
+    return session.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+
+
+def get_active_job(session, document_id, kind):
+    return session.query(ProcessingJob).filter(
+        ProcessingJob.document_id == document_id,
+        ProcessingJob.kind == kind,
+        ProcessingJob.status.in_(['queued', 'running']),
+    ).order_by(ProcessingJob.id.desc()).first()
+
+
+def create_job(session, document_id, kind, max_attempts=3):
+    """Create an idempotent queued job for a document."""
+    active = get_active_job(session, document_id, kind)
+    if active:
+        return active, False
+
+    job = ProcessingJob(
+        document_id=document_id,
+        kind=kind,
+        status='queued',
+        active_key=f'{kind}:{document_id}',
+        max_attempts=max_attempts,
+    )
+    session.add(job)
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        active = get_active_job(session, document_id, kind)
+        if active:
+            return active, False
+        raise
+    return job, True
+
+
+def recover_stale_jobs(session, stale_before):
+    """Return interrupted running jobs to the durable queue."""
+    return session.query(ProcessingJob).filter(
+        ProcessingJob.status == 'running',
+        ProcessingJob.started_at < stale_before,
+    ).update(
+        {
+            ProcessingJob.status: 'queued',
+            ProcessingJob.started_at: None,
+            ProcessingJob.error: 'Восстановлено после перезапуска worker',
+        },
+        synchronize_session=False,
+    )
+
+
+def get_queued_jobs(session):
+    return session.query(ProcessingJob).filter(
+        ProcessingJob.status == 'queued',
+        ProcessingJob.available_at <= datetime.now(),
+    ).order_by(ProcessingJob.created_at.asc()).all()
+
+
+def update_job(session, job_id, **kwargs):
+    job = get_job(session, job_id)
+    if job:
+        for key, value in kwargs.items():
+            if hasattr(job, key):
+                setattr(job, key, value)
+        session.commit()
+    return job

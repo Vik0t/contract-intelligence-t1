@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "required_top_level": ["document_id", "files", "document_tags", "gold"],
+  "document_tags": ["contract_family", "template_group", "is_scan", "has_tables", "language"],
+  "gold_fields": ["contract_number", "contract_date", "contract_type", "place", "term", "parties", "total_amount", "vat"],
+  "metric_notes": {
+    "term": "value is compared after date normalization",
+    "vat": "rate and mode are scored separately and jointly",
+    "evidence": "page numbers are scored separately from normalized values"
+  }
+}

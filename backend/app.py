@@ -7,35 +7,76 @@ import shutil
 import tempfile
 import threading
 import bcrypt
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Depends, Header, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Header, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 
 import backend.database as database
 import backend.api_requests as api_requests
+from backend.config import get_settings
+from backend.file_validation import UploadValidationError, validate_document_file
+from backend.jobs import JobManager
 
 from src.local_extraction import extract_text_from_document, extract_contract_key_data
+
+settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Recover durable jobs on startup and stop workers on shutdown."""
+    JOB_MANAGER.recover()
+    try:
+        yield
+    finally:
+        JOB_MANAGER.shutdown()
+
 
 app = FastAPI(
     title="T1 Contract Intelligence",
     description="Extracting important info from contracts",
-    version="1.0.0"
+    version="1.1.0",
+    lifespan=lifespan,
 )
 
-engine = database.get_engine(os.getenv(
-    'DATABASE_URL',
-    'sqlite:///documents.db'
-))
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+engine = database.get_engine(settings.database_url)
 database.create_tables(engine)
 
-STORAGE_ROOT = Path(os.getenv('DOCUMENT_STORAGE_DIR', 'uploads'))
+STORAGE_ROOT = Path(settings.document_storage_dir)
 STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 PROCESSING_LOCK = threading.Lock()
 
 @app.get("/ping")
 async def ping():
     return "pong!"
+
+
+@app.get("/", include_in_schema=False)
+async def service_root():
+    """Small API landing response for direct browser visits."""
+    return {
+        "service": "T1 Contract Intelligence API",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/ping",
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Avoid noisy 404s when a browser probes the API root."""
+    return Response(status_code=204)
 
 # ============ HELPER FUNCTIONS ============
 
@@ -218,13 +259,20 @@ def process_document_parsing(document_id: int):
                     db,
                     document_id,
                     processing_status='failed',
-                    processing_error=f'Не удалось подготовить документ к анализу: {str(e)}'
+                    processing_error='Не удалось подготовить документ к анализу. Повторите попытку позже.'
                 )
             else:
                 try_remove_file(stored_path)
     except Exception as e:
         logger.error(f"Critical error in process_document_parsing for {document_id}: {str(e)}")
         logger.error(traceback.format_exc())
+        if database.get_document(db, document_id) is not None:
+            database.update_document(
+                db,
+                document_id,
+                processing_status='failed',
+                processing_error='Не удалось подготовить документ к анализу. Повторите попытку позже.'
+            )
     finally:
         db.close()
 
@@ -303,13 +351,39 @@ def process_metadata_extraction(document_id: int):
                     db,
                     document_id,
                     processing_status='failed',
-                    processing_error=f'Не удалось извлечь реквизиты: {str(e)}'
+                    processing_error='Не удалось извлечь реквизиты. Повторите попытку позже.'
                 )
     except Exception as e:
         logger.error(f"Critical error in process_metadata_extraction for {document_id}: {str(e)}")
         logger.error(traceback.format_exc())
+        if database.get_document(db, document_id) is not None:
+            database.update_document(
+                db,
+                document_id,
+                processing_status='failed',
+                processing_error='Не удалось извлечь реквизиты. Повторите попытку позже.'
+            )
     finally:
         db.close()
+
+
+def run_processing_job(kind: str, document_id: int) -> None:
+    if kind == 'parse':
+        process_document_parsing(document_id)
+    elif kind == 'extract':
+        process_metadata_extraction(document_id)
+    else:
+        raise ValueError(f'Unknown processing job kind: {kind}')
+
+
+JOB_MANAGER = JobManager(
+    engine,
+    run_processing_job,
+    max_workers=settings.job_worker_count,
+    max_attempts=settings.max_job_attempts,
+    stale_after_minutes=settings.job_stale_after_minutes,
+)
+
 
 # ============ AUTHENTICATION ENDPOINTS ============
 
@@ -566,7 +640,16 @@ async def delete_current_user(authorization: str = Header(...)):
     token = authorization.replace("Bearer ", "")
     user, db = get_user_from_token(token)
     try:
+        stored_paths = [
+            document.stored_path
+            for document in db.query(database.Document).filter(
+                database.Document.owner == user.id
+            ).all()
+            if document.stored_path
+        ]
         database.delete_user(db, user.id)
+        for stored_path in stored_paths:
+            try_remove_file(stored_path)
         return api_requests.UserDeleteResponse(
             success=True,
             message="Account deleted successfully"
@@ -579,11 +662,11 @@ async def delete_current_user(authorization: str = Header(...)):
 @app.post(
     "/documents",
     response_model=api_requests.DocumentUploadResponse,
+    status_code=202,
     summary="Upload document",
     description="Upload a new document for processing"
 )
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     template_id: Optional[int] = Form(None),
     folder_id: Optional[int] = Form(None),
@@ -602,7 +685,8 @@ async def upload_document(
     user, _ = get_user_from_token(token)
     _.close()
     
-    file_extension = os.path.splitext(file.filename)[1].lower()
+    filename = file.filename or ""
+    file_extension = os.path.splitext(filename)[1].lower()
     if file_extension not in {'.pdf', '.docx'}:
         raise HTTPException(
             status_code=400,
@@ -613,10 +697,31 @@ async def upload_document(
     try:
         temp_fd, temp_path = tempfile.mkstemp(suffix=file_extension)
         with os.fdopen(temp_fd, 'wb') as temp_file:
-            content = await file.read()
-            temp_file.write(content)
+            total_size = 0
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > settings.upload_limit_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Файл слишком большой. Максимальный размер: {settings.max_upload_size_mb} МБ",
+                    )
+                temp_file.write(chunk)
+
+        try:
+            validate_document_file(
+                temp_path,
+                file_extension,
+                max_pdf_pages=settings.max_pdf_pages,
+            )
+        except UploadValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         
         db = database.get_session(engine)
+        document = None
+        stored_path = None
         try:
             if template_id is not None:
                 template = database.get_template(db, template_id=template_id)
@@ -631,10 +736,10 @@ async def upload_document(
                 db,
                 owner=user.id,
                 template_id=template_id,  # Can be None
-                filename=file.filename,
+                filename=filename,
                 folder_id=folder_id
             )
-            stored_path = get_document_storage_path(user.id, document.id, file.filename)
+            stored_path = get_document_storage_path(user.id, document.id, filename)
             shutil.copyfile(temp_path, stored_path)
             database.update_document(
                 db,
@@ -643,7 +748,7 @@ async def upload_document(
                 processing_status='processing',
                 processing_error=None
             )
-            background_tasks.add_task(process_document_parsing, document.id)
+            JOB_MANAGER.enqueue(document.id, 'parse')
             
             return api_requests.DocumentUploadResponse(
                 success=True,
@@ -652,6 +757,11 @@ async def upload_document(
                 document=create_document_response(document),
                 parsing_time_seconds=None
             )
+        except Exception:
+            if document is not None:
+                database.delete_document(db, document.id)
+            try_remove_file(stored_path)
+            raise
         finally:
             db.close()
     finally:
@@ -802,7 +912,6 @@ async def delete_document(
 )
 async def analyze_document(
     document_id: int,
-    background_tasks: BackgroundTasks,
     authorization: str = Header(...)
 ):
     """Queue GPU extraction and return immediately with the current status."""
@@ -831,7 +940,7 @@ async def analyze_document(
             processing_status='processing',
             processing_error=None
         )
-        background_tasks.add_task(process_metadata_extraction, document.id)
+        JOB_MANAGER.enqueue(document.id, 'extract')
         return create_document_response(document)
     finally:
         db.close()
@@ -889,18 +998,15 @@ async def update_document_metadata(
 @app.post(
     "/documents/{document_id}/metadata",
     response_model=api_requests.MetadataExtractResponse,
-    summary="Extract metadata",
-    description="Extract metadata to a document"
+    status_code=202,
+    summary="Queue metadata extraction",
+    description="Queue metadata extraction and poll the document endpoint for the result"
 )
 async def extract_metadata(
         document_id: int,
         authorization: str = Header(...)
 ):
-    """
-    Extract metadata from the document
-    - document_id: ID of the document
-    Authentication token automatically extracted from Authorization header
-    """
+    """Backward-compatible async alias for ``/documents/{id}/analyze``."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authentication scheme")
     token = authorization.replace("Bearer ", "")
@@ -909,68 +1015,33 @@ async def extract_metadata(
         document = database.get_document(db, document_id=document_id)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
-
         verify_document_ownership(user, document)
 
-        parsed_doc = database.get_parsed_document(db, document_id)
-        if not parsed_doc:
-            raise HTTPException(status_code=400, detail="Document has not been parsed yet")
-
-        document_ir = None
-        if parsed_doc.document_ir:
-            from src.document_ir import DocumentIR
-            document_ir = DocumentIR.model_validate(parsed_doc.document_ir)
-
-        start_time = datetime.now()
-        try:
-            # Reset stats before extraction
-            from src.local_extraction import reset_extraction_stats
-            reset_extraction_stats()
-
-            extracted_data, token_usage = extract_contract_key_data(
-                text=parsed_doc.text,
-                document_ir=document_ir,
-                max_new_tokens=4096,
-                collect_stats=True
+        if document.document_metadata is not None:
+            metadata = create_metadata_response(document.document_metadata)
+            return api_requests.MetadataExtractResponse(
+                success=True,
+                message="Metadata already extracted",
+                metadata_id=metadata.id,
+                metadata=metadata,
             )
-        except ValueError as e:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Model could not process this document properly. Please try again."
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to extract metadata: {str(e)}"
-            )
+        if database.get_parsed_document(db, document_id) is None:
+            if document.processing_status == 'processing':
+                raise HTTPException(status_code=409, detail="Document is still being prepared")
+            raise HTTPException(status_code=400, detail="Document is not ready for analysis")
 
-        extraction_time = (datetime.now() - start_time).total_seconds()
-
-        metadata = database.create_metadata(db, document_id=document_id, fields=extracted_data)
         database.update_document(
             db,
             document.id,
-            processing_status='extracted',
-            processing_error=None
+            processing_status='processing',
+            processing_error=None,
         )
-
-        existing_stats = database.get_stats(db, document_id=document_id)
-        if existing_stats:
-            latest_stat = existing_stats[-1] if isinstance(existing_stats, list) else existing_stats
-            database.update_stats(
-                db,
-                latest_stat.id,
-                extracting_time=extraction_time,
-                prompt_tokens=(latest_stat.prompt_tokens or 0) + token_usage["prompt_tokens"],
-                completion_tokens=(latest_stat.completion_tokens or 0) + token_usage["completion_tokens"],
-                total_tokens=(latest_stat.total_tokens or 0) + token_usage["total_tokens"]
-            )
-
+        JOB_MANAGER.enqueue(document.id, 'extract')
         return api_requests.MetadataExtractResponse(
             success=True,
-            message="Metadata extracted successfully",
-            metadata_id=metadata.id,
-            metadata=create_metadata_response(metadata)
+            message="Извлечение поставлено в очередь. Получите результат через GET /documents/{id}.",
+            metadata_id=None,
+            metadata=None,
         )
     finally:
         db.close()

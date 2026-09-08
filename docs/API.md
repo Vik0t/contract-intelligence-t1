@@ -286,6 +286,8 @@ Permanently delete your user account.
 
 Upload a contract or legal document for processing.
 
+The request returns immediately with `202`-style asynchronous processing semantics. The parser runs in the background; poll `GET /documents/{document_id}` until `status` becomes `ready` or `failed`.
+
 #### Headers
 
 | Header | Required | Description |
@@ -313,7 +315,7 @@ Upload a contract or legal document for processing.
     "template_id": null,
     "created_at": "2026-01-01T00:00:00Z"
   },
-  "parsing_time_seconds": 2.45
+  "parsing_time_seconds": null
 }
 ```
 
@@ -435,7 +437,7 @@ Permanently delete a document and all associated metadata.
 
 > **POST** `/documents/{document_id}/metadata`
 
-Run AI-powered extraction to pull structured information from your document.
+Queue AI-powered extraction to pull structured information from your document. The response is immediate; poll `GET /documents/{document_id}` until `status` becomes `extracted` or `failed`.
 
 #### Headers
 
@@ -449,43 +451,34 @@ Run AI-powered extraction to pull structured information from your document.
 |-----------|------|-------------|
 | `document_id` | integer | ID of the document to extract from |
 
-#### Response
+#### Response (`202 Accepted`)
 
 ```json
 {
   "success": true,
-  "message": "Metadata extracted successfully",
-  "metadata_id": 456,
-  "metadata": {
-    "id": 456,
-    "document_id": 123,
-    "fields": {
-      "contract_value": 1500000,
-      "effective_date": "2026-01-15",
-      "expiry_date": "2027-01-15",
-      "parties": ["Acme Corp", "Beta Inc"],
-      "governing_law": "New York"
-    },
-    "created_at": "2026-01-01T00:05:00Z"
-  }
+  "message": "Извлечение поставлено в очередь. Получите результат через GET /documents/{id}.",
+  "metadata_id": null,
+  "metadata": null
 }
 ```
 
+`POST /documents/{document_id}/analyze` is the preferred name for the same asynchronous operation. The `/metadata` route remains as a backward-compatible alias.
+
 ---
 
-## 📊 Statistics (Admin Only)
+## 📊 Statistics
 
 ### Get Statistics
 
 > **GET** `/stats`
 
-Retrieve platform-wide usage and performance statistics. Requires admin privileges.
+Retrieve usage and performance statistics for the authenticated user. Admins receive platform-wide totals.
 
 #### Headers
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `Authorization` | ✅ | Admin session token |
+| `Authorization` | ✅ | Your session token |
 
 #### Query Parameters
 
@@ -583,7 +576,7 @@ All endpoints may return validation errors in the following format:
 
 1. **Always authenticate first** — call `/auth/login` before accessing protected endpoints.
 2. **Save your session token** — you'll need it for all subsequent requests.
-3. **Extract metadata early** — after uploading a document, run the metadata extraction to get structured data.
+3. **Respect asynchronous processing** — after uploading, poll the document status before requesting extraction; then poll again for `extracted`.
 4. **Handle pagination** — for large document lists, use the `page` and `limit` parameters.
 5. **Check your role** — the `/stats` endpoint is available only for admin users.
 
@@ -605,7 +598,8 @@ All endpoints may return validation errors in the following format:
 | GET | `/documents` | List your documents |
 | GET | `/documents/{id}` | Get document details |
 | DELETE | `/documents/{id}` | Delete document |
-| POST | `/documents/{id}/metadata` | Extract metadata |
+| POST | `/documents/{id}/analyze` | Queue metadata extraction |
+| POST | `/documents/{id}/metadata` | Queue metadata extraction (legacy alias) |
 | GET | `/stats` | Admin statistics |
 
 ---

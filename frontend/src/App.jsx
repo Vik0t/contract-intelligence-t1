@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 
 const API_PREFIX = '/api';
@@ -349,28 +349,62 @@ function App() {
   const [draggedDocumentId, setDraggedDocumentId] = useState(null);
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState('library'); // 'library' | 'stats'
+  const libraryRequestRef = useRef(null);
 
   const clearSession = useCallback(() => { localStorage.removeItem('contract_token'); localStorage.removeItem('contract_user'); setToken(null); setUser(null); setSelectedDocument(null); }, []);
   const logout = useCallback(async () => { try { if (token) await request('/auth/logout', { method: 'POST', body: JSON.stringify({ session_token: token }) }); } catch { /* Local session is still cleared. */ } clearSession(); }, [clearSession, token]);
 
-  const loadLibrary = useCallback(async () => {
+  const loadLibrary = useCallback(async ({ showLoading = true } = {}) => {
     if (!token) return;
-    setLibraryLoading(true);
-    try {
-      const query = new URLSearchParams({ page: '1', limit: '100' });
-      if (selectedFolderId !== null) query.set('folder_id', String(selectedFolderId));
-      if (search.trim()) query.set('search', search.trim());
-      const [folderResult, documentResult] = await Promise.allSettled([request('/folders', { headers: authHeaders(token) }), request(`/documents?${query.toString()}`, { headers: authHeaders(token) })]);
-      if (documentResult.status === 'rejected') throw documentResult.reason;
-      setDocuments(documentResult.value.documents ?? []); setTotalDocuments(documentResult.value.total ?? 0);
-      if (folderResult.status === 'fulfilled') setFolders(folderResult.value.folders ?? []);
-      else { setFolders([]); setError('Не удалось загрузить папки. Документы доступны в общем списке.'); }
-    } catch (requestError) { if (requestError.status === 401) clearSession(); setError(friendlyError(requestError)); } finally { setLibraryLoading(false); }
+    if (libraryRequestRef.current) return libraryRequestRef.current;
+
+    const requestPromise = (async () => {
+      if (showLoading) setLibraryLoading(true);
+      try {
+        const query = new URLSearchParams({ page: '1', limit: '100' });
+        if (selectedFolderId !== null) query.set('folder_id', String(selectedFolderId));
+        if (search.trim()) query.set('search', search.trim());
+        const [folderResult, documentResult] = await Promise.allSettled([request('/folders', { headers: authHeaders(token) }), request(`/documents?${query.toString()}`, { headers: authHeaders(token) })]);
+        if (documentResult.status === 'rejected') throw documentResult.reason;
+        setDocuments(documentResult.value.documents ?? []); setTotalDocuments(documentResult.value.total ?? 0);
+        if (folderResult.status === 'fulfilled') setFolders(folderResult.value.folders ?? []);
+        else { setFolders([]); setError('Не удалось загрузить папки. Документы доступны в общем списке.'); }
+      } catch (requestError) { if (requestError.status === 401) clearSession(); setError(friendlyError(requestError)); }
+      finally {
+        if (showLoading) setLibraryLoading(false);
+        libraryRequestRef.current = null;
+      }
+    })();
+
+    libraryRequestRef.current = requestPromise;
+    return requestPromise;
   }, [clearSession, search, selectedFolderId, token]);
 
-  useEffect(() => { loadLibrary(); }, [loadLibrary]);
-  useEffect(() => { if (!token || !documents.some((document) => document.status === 'processing')) return undefined; const intervalId = window.setInterval(loadLibrary, 2500); return () => window.clearInterval(intervalId); }, [documents, loadLibrary, token]);
-  useEffect(() => { if (!token || !selectedDocument) return; const summary = documents.find((document) => document.id === selectedDocument.id); if (!summary || (summary.status === selectedDocument.status && summary.has_metadata === selectedDocument.has_metadata)) return; request(`/documents/${selectedDocument.id}`, { headers: authHeaders(token) }).then(setSelectedDocument).catch((requestError) => { if (requestError.status === 401) clearSession(); }); }, [clearSession, documents, selectedDocument, token]);
+  useEffect(() => { void loadLibrary(); }, [loadLibrary]);
+  const hasProcessingDocuments = documents.some((document) => document.status === 'processing');
+  useEffect(() => {
+    if (!token || !hasProcessingDocuments) return undefined;
+    const intervalId = window.setInterval(() => { void loadLibrary({ showLoading: false }); }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [hasProcessingDocuments, loadLibrary, token]);
+  const selectedDocumentRefreshRef = useRef(null);
+  useEffect(() => {
+    if (!token || !selectedDocument) {
+      selectedDocumentRefreshRef.current = null;
+      return undefined;
+    }
+    const summary = documents.find((document) => document.id === selectedDocument.id);
+    if (!summary || (summary.status === selectedDocument.status && summary.has_metadata === selectedDocument.has_metadata)) return undefined;
+
+    const refreshKey = `${selectedDocument.id}:${summary.status}:${summary.has_metadata}`;
+    if (selectedDocumentRefreshRef.current === refreshKey) return undefined;
+    selectedDocumentRefreshRef.current = refreshKey;
+    let cancelled = false;
+    request(`/documents/${selectedDocument.id}`, { headers: authHeaders(token) })
+      .then((document) => { if (!cancelled) setSelectedDocument(document); })
+      .catch((requestError) => { if (!cancelled && requestError.status === 401) clearSession(); });
+    return () => { cancelled = true; };
+  }, [clearSession, documents, selectedDocument, token]);
 
   const updateAuthField = (event) => { const { name, value } = event.target; setAuthForm((current) => ({ ...current, [name]: value })); };
   const handleAuth = async (event) => { event.preventDefault(); setAuthLoading(true); setError(''); try { if (authMode === 'register') await request('/auth/register', { method: 'POST', body: JSON.stringify(authForm) }); const session = await request('/auth/login', { method: 'POST', body: JSON.stringify({ username: authForm.username, password: authForm.password }) }); localStorage.setItem('contract_token', session.session_token); localStorage.setItem('contract_user', JSON.stringify(session.user)); setToken(session.session_token); setUser(session.user); setAuthForm({ username: '', email: '', password: '' }); } catch (requestError) { setError(friendlyError(requestError)); } finally { setAuthLoading(false); } };

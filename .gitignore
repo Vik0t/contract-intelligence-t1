@@ -8,8 +8,8 @@
 venv
 *__pycache__/*
 *.env
+!.env.example
 *.txt
-!requirements.txt
 !frontend/package.json
 !frontend/package-lock.json
 dataset
@@ -17,3 +17,5 @@ dataset
 .pytest_cache/
 tmp
 *.log
+!meta/README.md
+!meta/schema.json

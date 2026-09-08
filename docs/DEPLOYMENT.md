@@ -4,10 +4,10 @@ Welcome to the **T1 Contract Intelligence** — a powerful service designed to e
 
 ## Prerequisites
 
-- **Python 3.12+** - For the backend
+- **Python 3.12–3.13** - For the backend and reproducible ML wheels
 - **Node.js 18+** - For the frontend
-- **PostgreSQL** - Database
-- **uv** (recommended) or pip - Python package manager
+- **PostgreSQL** - Database for multi-user deployments; SQLite is suitable for local development
+- **uv** - Python package manager
 
 ## Database Setup
 
@@ -68,12 +68,12 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 ### 3. Install dependencies
 ```bash
-uv pip install -r requirements.txt
+uv sync
 ```
 
 ### 4. Start the backend server
 ```bash
-uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000
 ```
 
 The backend will be available at: `http://localhost:8000`
@@ -83,6 +83,17 @@ The backend will be available at: `http://localhost:8000`
 curl http://localhost:8000/ping
 # Expected response: "pong!"
 ```
+
+## Production checklist
+
+- Copy `.env.example` to `.env` and set `DATABASE_URL`, `DOCUMENT_STORAGE_DIR`, and exact `CORS_ORIGINS`.
+- Keep uploaded files in private durable storage; do not expose `DOCUMENT_STORAGE_DIR` through the frontend web server.
+- Run one GPU worker per GPU. The built-in job runner is durable for a single local process; use Redis/RQ/Celery before scaling to multiple backend processes.
+- Windows uses the explicit PyTorch CUDA 13.0 index configured in `pyproject.toml`; Apple Silicon macOS uses the MLX profile and CPU/Metal-compatible PyTorch wheels.
+- CUDA uses BF16 for NuExtract by default; set `CONTRACT_MODEL_QUANTIZATION=8bit` only when BF16 is unavailable or memory-constrained.
+- Use `uv sync` so platform markers and the lockfile select the correct ML runtime.
+- Rotate any API key that was ever committed or shared outside the secret manager. The local NuExtract pipeline does not require `OPENROUTER_API_KEY`.
+- Run `uv run python -m pytest -q` and `npm run build` before release.
 
 ## Frontend Setup
 

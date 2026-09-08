@@ -1,35 +1,5 @@
-## Т1-2. Система извлечения ключевой информации из договоров
+# Legacy notes
 
-веб-сервис, автоматизирующий перенос информации из договоров в реестр.
+This file is retained only as historical context. The active product uses the local NuExtract pipeline and does not require OpenRouter.
 
-
-
-Как запустить?
-
-Сначала скачиваем uv, инструкция [здесь:](https://docs.astral.sh/uv/getting-started/installation/)
-
-Потом вводим следующие команды в терминале:
-
-```
-uv init
-uv sync
-```
-
-
-После этого загружаем датасет:
-
-```
-uv run make_dataset.py
-```
-
-Создаем бесплатный API ключ на openrouter и экспортируем его как переменную среды
-
-```
-$env:OPENROUTER_API_KEY="sk-or-v1-..."
-```
-
-Теперь можем запускать main.py
-
-```
-uv run main.py
-```
+Use the root `README.md`, `docs/DEPLOYMENT.md`, and `docs/OPERATIONS.md` for the current setup.

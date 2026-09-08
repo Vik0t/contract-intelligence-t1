@@ -6,7 +6,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import backend.app as app_module
 from backend.app import app
+from backend.config import get_settings
+from backend.jobs import JobManager
 import backend.database as database
 
 client = TestClient(app)
@@ -19,11 +22,23 @@ TEST_ADMIN_EMAIL = "admin@example.com"
 TEST_ADMIN_PASSWORD = "adminpass123"
 
 @pytest.fixture(autouse=True)
-def setup_database():
-    """Reset database before each test"""
-    engine = database.get_engine()
-    database.Base.metadata.drop_all(engine)
-    database.Base.metadata.create_all(engine)
+def setup_database(tmp_path):
+    """Use an isolated database and storage directory for every API test."""
+    previous_manager = app_module.JOB_MANAGER
+    previous_manager.shutdown()
+
+    engine = database.get_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    database.create_tables(engine)
+    app_module.engine = engine
+    app_module.STORAGE_ROOT = tmp_path / "uploads"
+    app_module.STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+    app_module.JOB_MANAGER = JobManager(
+        engine,
+        app_module.run_processing_job,
+        max_workers=get_settings().job_worker_count,
+        max_attempts=get_settings().max_job_attempts,
+        stale_after_minutes=get_settings().job_stale_after_minutes,
+    )
     
     db = database.get_session(engine)
     import bcrypt
@@ -37,7 +52,7 @@ def setup_database():
     )
     db.close()
     yield
-    db.close()
+    app_module.JOB_MANAGER.shutdown()
 
 def get_auth_header(username=TEST_USERNAME, email=TEST_EMAIL, password=TEST_PASSWORD):
     """Register and login, return auth header"""
@@ -69,6 +84,18 @@ def test_ping():
     response = client.get("/ping")
     assert response.status_code == 200
     assert response.json() == "pong!"
+
+
+def test_service_root():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["docs"] == "/docs"
+
+
+def test_favicon_probe_is_empty():
+    response = client.get("/favicon.ico")
+    assert response.status_code == 204
 
 # ============ AUTHENTICATION TESTS ============
 
@@ -512,14 +539,13 @@ class TestDocumentEndpoints:
                 data={"template_id": None}  
             )
         
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
         assert data["success"] == True
         assert data["document_id"] is not None
         assert data["document"] is not None
         assert data["document"]["filename"] == "test.pdf"
-        assert data["parsing_time_seconds"] is not None
-        assert data["parsing_time_seconds"] >= 0
+        assert data["parsing_time_seconds"] is None or data["parsing_time_seconds"] >= 0
     
     def test_upload_docx_document(self):
         """Test uploading a DOCX document"""
@@ -544,7 +570,7 @@ class TestDocumentEndpoints:
                 data={"template_id": None}  
             )
         
-        assert response.status_code == 200
+        assert response.status_code == 202
         assert response.json()["success"] == True
     
     def test_upload_invalid_file_type(self):
@@ -761,19 +787,12 @@ class TestMetadataEndpoints:
             headers=headers
         )
         
-        # Accept both success and model limitation errors
-        if response.status_code == 200:
+        # Extraction is queued; the result is read through GET /documents/{id}.
+        assert response.status_code in {202, 409}
+        if response.status_code == 202:
             data = response.json()
-            assert data["success"] == True
-            assert data["metadata_id"] is not None
-            assert data["metadata"] is not None
-            assert "fields" in data["metadata"]
-        elif response.status_code == 422:
-            # Model couldn't process - acceptable on limited hardware
-            assert "model" in response.json()["detail"].lower()
-        elif response.status_code == 500:
-            # Other server error - might be model related
-            pytest.skip(f"Model processing failed (status 500): {response.json()['detail']}")
+            assert data["success"] is True
+            assert data["metadata_id"] is None
     
     def test_extract_metadata_document_not_found(self):
         """Test extracting metadata for non-existent document"""
