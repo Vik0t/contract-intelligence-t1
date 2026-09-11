@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import fitz
+import pymupdf
 import pytest
 
 from backend.file_validation import UploadValidationError, validate_document_file
@@ -8,7 +8,7 @@ from backend.file_validation import UploadValidationError, validate_document_fil
 
 def test_pdf_signature_and_page_limit(tmp_path: Path) -> None:
     path = tmp_path / "document.pdf"
-    pdf = fitz.open()
+    pdf = pymupdf.open()
     pdf.new_page()
     pdf.save(path)
     pdf.close()

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import zipfile
 
-import fitz
+import pymupdf
 
 
 class UploadValidationError(ValueError):
@@ -24,7 +24,7 @@ def validate_document_file(path: str | Path, extension: str, *, max_pdf_pages: i
         if not header.startswith(b"%PDF-"):
             raise UploadValidationError("Файл не является корректным PDF")
         try:
-            with fitz.open(document_path) as pdf:
+            with pymupdf.open(document_path) as pdf:
                 if len(pdf) > max_pdf_pages:
                     raise UploadValidationError(
                         f"PDF содержит слишком много страниц: максимум {max_pdf_pages}"

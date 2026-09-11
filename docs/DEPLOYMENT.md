@@ -44,12 +44,20 @@ CREATE DATABASE contract_intelligence;
 
 ### 3. Configure Database Connection
 
-Create a `.env` file in the root directory and set PostgreSQL connection string:
+For local development, use the SQLite configuration from `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+This uses `sqlite:///documents.db` and does not require PostgreSQL. For a
+multi-user deployment, replace it with a connection string containing an
+actual PostgreSQL role and database name:
 
 ```env
-# Database
-# Skip ":password" part if no password
-DATABASE_URL=postgresql://username:password@localhost:5432/contract_intelligence
+# Replace every placeholder with real values; do not use "username" literally.
+# Skip ":password" only when the PostgreSQL role has no password.
+DATABASE_URL=postgresql://<actual_user>:<password>@localhost:5432/contract_intelligence
 ```
 
 ## Backend Setup

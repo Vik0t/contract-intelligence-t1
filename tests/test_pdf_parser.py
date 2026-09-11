@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import fitz
+import pymupdf
 from PIL import Image
 
 from src.document_ir import (
@@ -204,7 +204,7 @@ def test_ocr_is_called_only_for_required_pages(
 
 def test_ocr_preserves_short_digital_text(tmp_path: Path) -> None:
     pdf_path = tmp_path / "short-digital-text.pdf"
-    pdf = fitz.open()
+    pdf = pymupdf.open()
     page = pdf.new_page()
     page.insert_text((72, 72), "Short digital text")
     pdf.save(pdf_path)
@@ -227,7 +227,7 @@ def test_ocr_preserves_short_digital_text(tmp_path: Path) -> None:
 
 
 def create_test_pdf(path: Path) -> None:
-    pdf = fitz.open()
+    pdf = pymupdf.open()
 
     # Страница без цифрового текста.
     pdf.new_page()

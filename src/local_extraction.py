@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 from functools import lru_cache
+import importlib.util
 import logging
 import json
 import os
 from pathlib import Path
 import re
 import platform
-import sys
 from typing import Any
 
 from dotenv import load_dotenv
@@ -54,14 +54,10 @@ IS_WINDOWS = platform.system() == "Windows"
 IS_LINUX = platform.system() == "Linux"
 
 if IS_MACOS:
-    try:
-        # Если macos и доступна mlx-lm, подгружаем ее
-        import mlx_lm
-        from mlx_lm import load, generate
-        MLX_AVAILABLE = True
-    except ImportError:
-        # fallback на pytorch
-        MLX_AVAILABLE = False
+    # Do not import mlx-lm during module import: initializing MLX requires a
+    # working Metal device and would otherwise abort test/API startup on hosts
+    # where inference is not being used.
+    MLX_AVAILABLE = importlib.util.find_spec("mlx_lm") is not None
 else:
     MLX_AVAILABLE = False
 
@@ -736,7 +732,9 @@ def postprocess_extraction(result: dict[str, Any], text: str) -> dict[str, Any]:
 def load_model() -> tuple[Any, Any]:
     """Загружает модель один раз на процесс."""
     if IS_MACOS and MLX_AVAILABLE:
-        model, tokenizer = load("numind/NuExtract3-mlx-8bits")
+        from mlx_lm import load as mlx_load
+
+        model, tokenizer = mlx_load("numind/NuExtract3-mlx-8bits")
         return model, tokenizer
     
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
@@ -863,6 +861,8 @@ def extract_fields_from_text(
     completion_tokens = 0
 
     if IS_MACOS and MLX_AVAILABLE:
+        from mlx_lm import generate as mlx_generate
+
         model, tokenizer = load_model()
 
         messages = build_messages(text)
@@ -878,7 +878,7 @@ def extract_fields_from_text(
         # Count prompt tokens
         prompt_tokens = _count_tokens_mlx(tokenizer, prompt)
 
-        raw = generate(
+        raw = mlx_generate(
             model,
             tokenizer,
             prompt=prompt,

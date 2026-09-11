@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-import fitz
+import pymupdf
 import pytesseract
 from PIL import Image
 
@@ -190,7 +190,7 @@ def _int_at(
 
 
 def render_pdf_page(
-    page: fitz.Page,
+    page: pymupdf.Page,
     *,
     dpi: int = 200,
 ) -> Image.Image:

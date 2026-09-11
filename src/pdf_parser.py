@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import fitz
+import pymupdf
 from src.ocr import OCRBackend, render_pdf_page
 from src.document_ir import (
     BBox,
@@ -31,7 +31,7 @@ def parse_pdf(
     pages: list[PageIR] = []
     warnings: list[str] = []
 
-    with fitz.open(path) as pdf:
+    with pymupdf.open(path) as pdf:
         page_count = len(pdf)
 
         for page_index, page in enumerate(pdf):
@@ -121,5 +121,4 @@ def parse_pdf(
         pages=pages,
         warnings=warnings,
     )
-
 
