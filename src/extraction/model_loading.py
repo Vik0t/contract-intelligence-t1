@@ -22,7 +22,7 @@ DEFAULT_MODEL_QUANTIZATION = "bf16"
 # "auto" — прежнее поведение (MLX на macOS, если доступен, иначе HF/transformers).
 # "huggingface" — всегда идти через transformers, даже на macOS с установленным mlx-lm.
 # "mlx" — принудительно использовать MLX (только на macOS).
-EXTRACTION_BACKEND_ENV = "EXTRACTION_BACKEND"
+EXTRACTION_BACKEND_ENV = "CONTRACT_EXTRACTION_BACKEND"
 
 IS_MACOS = platform.system() == "Darwin"
 
