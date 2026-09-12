@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +27,13 @@ class Settings(BaseSettings):
     max_job_attempts: int = Field(default=3, ge=1, le=10)
     job_worker_count: int = Field(default=1, ge=1, le=4)
     job_stale_after_minutes: int = Field(default=30, ge=1, le=1440)
+    extraction_backend: Literal["local", "huggingface-space"] = "local"
+    hf_space_id: str = "numind/NuExtract3"
+    hf_space_api_name: str = "/on_extract_click"
+    hf_space_prompt_mode: Literal["production", "compact"] = "compact"
+    hf_space_context_mode: Literal["full", "retrieved"] = "retrieved"
+    hf_space_context_chars: int = Field(default=3000, ge=500, le=10000)
+    hf_space_reasoning: bool = False
 
     @property
     def upload_limit_bytes(self) -> int:

@@ -18,11 +18,13 @@ import backend.database as database
 import backend.api_requests as api_requests
 from backend.config import get_settings
 from backend.file_validation import UploadValidationError, validate_document_file
+from backend.extraction import ExtractionService
 from backend.jobs import JobManager
 
-from src.local_extraction import extract_text_from_document, extract_contract_key_data
+from src.local_extraction import extract_text_from_document
 
 settings = get_settings()
+EXTRACTION_SERVICE = ExtractionService(settings)
 
 
 @asynccontextmanager
@@ -299,11 +301,7 @@ def process_metadata_extraction(document_id: int):
                 started_at = datetime.now()
                 logger.info(f"Calling extract_contract_key_data for {document_id}")
 
-                # Reset stats before extraction
-                from src.local_extraction import reset_extraction_stats
-                reset_extraction_stats()
-
-                extracted_data, token_usage = extract_contract_key_data(
+                extracted_data, token_usage = EXTRACTION_SERVICE.extract(
                     text=parsed_doc.text,
                     document_ir=document_ir,
                     max_new_tokens=4096,
