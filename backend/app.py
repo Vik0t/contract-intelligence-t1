@@ -1,5 +1,6 @@
 import logging
 import traceback
+import html
 from datetime import datetime, timedelta
 import mimetypes
 import os
@@ -7,6 +8,7 @@ import shutil
 import tempfile
 import threading
 import bcrypt
+import pymupdf
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -192,6 +194,62 @@ def create_metadata_response(metadata):
         fields=metadata.fields,
         created_at=metadata.created_at
     )
+
+
+def readable_document_pages(parsed_document):
+    """Return user-facing page text without parser implementation details."""
+    document_ir = parsed_document.document_ir or {}
+    pages = []
+    for page_index, page in enumerate(document_ir.get('pages') or []):
+        blocks = page.get('blocks') or []
+        if page.get('needs_ocr'):
+            ocr_blocks = [block for block in blocks if block.get('source') == 'ocr']
+            if ocr_blocks:
+                blocks = ocr_blocks
+        blocks = sorted(
+            blocks,
+            key=lambda block: (
+                block.get('order') is None,
+                block.get('order') or 0,
+                (block.get('bbox') or {}).get('y0') or 0,
+                (block.get('bbox') or {}).get('x0') or 0,
+            ),
+        )
+        text = '\n\n'.join(
+            str(block.get('text') or '').strip()
+            for block in blocks
+            if str(block.get('text') or '').strip()
+        )
+        pages.append({
+            'number': page.get('number') or page_index + 1,
+            'text': text,
+        })
+    if not pages:
+        pages = [{'number': 1, 'text': parsed_document.text}]
+    return pages, document_ir.get('source_format')
+
+
+def create_text_preview_svg(filename: str, text: str) -> bytes:
+    """Create a lightweight first-page preview when a native render is unavailable."""
+    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [filename[:48], *raw_lines[:11]]
+    text_nodes = []
+    for index, line in enumerate(lines):
+        safe_line = html.escape(line[:64])
+        weight = '700' if index == 0 else '400'
+        size = '18' if index == 0 else '12'
+        text_nodes.append(
+            f'<text x="30" y="{48 + index * 25}" font-family="Arial, sans-serif" '
+            f'font-size="{size}" font-weight="{weight}" fill="#25282c">{safe_line}</text>'
+        )
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="360" height="480" viewBox="0 0 360 480">'
+        '<rect width="360" height="480" fill="#ffffff"/>'
+        '<rect x="0" y="0" width="8" height="480" fill="#18aef0"/>'
+        f'{"".join(text_nodes)}'
+        '</svg>'
+    )
+    return svg.encode('utf-8')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1264,6 +1322,81 @@ async def update_document(
         return create_document_response(document)
     finally:
         db.close()
+
+@app.get(
+    "/documents/{document_id}/content",
+    response_model=api_requests.DocumentContentResponse,
+    summary="Read parsed document content",
+    description="Return document text grouped by page for source verification",
+)
+async def get_document_content(document_id: int, authorization: str = Header(...)):
+    """Return owned parsed content without parser confidence or pipeline details."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
+    try:
+        document = database.get_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        verify_document_ownership(user, document)
+        parsed_document = database.get_parsed_document(db, document_id)
+        if not parsed_document:
+            raise HTTPException(status_code=409, detail="Document is still being prepared")
+        pages, source_format = readable_document_pages(parsed_document)
+        return api_requests.DocumentContentResponse(
+            source_format=source_format,
+            page_count=len(pages),
+            pages=pages,
+        )
+    finally:
+        db.close()
+
+
+@app.get(
+    "/documents/{document_id}/preview",
+    summary="Preview document",
+    description="Return a lightweight first-page preview for the document library",
+)
+async def get_document_preview(document_id: int, authorization: str = Header(...)):
+    """Render only the first page; never send the full document to a card preview."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    token = authorization.replace("Bearer ", "")
+    user, db = get_user_from_token(token)
+    try:
+        document = database.get_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        verify_document_ownership(user, document)
+        path = Path(document.stored_path) if document.stored_path else None
+        if not path or not path.exists():
+            raise HTTPException(status_code=404, detail="Original file is not available")
+        if path.suffix.lower() == '.pdf':
+            try:
+                with pymupdf.open(path) as pdf:
+                    if not pdf:
+                        raise ValueError("empty pdf")
+                    page = pdf[0]
+                    scale = min(1.0, 360 / max(page.rect.width, 1))
+                    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+                    return Response(
+                        content=pixmap.tobytes('png'),
+                        media_type='image/png',
+                        headers={'Cache-Control': 'private, max-age=3600'},
+                    )
+            except Exception as exc:
+                logger.warning("Could not render PDF preview for %s: %s", document_id, exc)
+        parsed_document = database.get_parsed_document(db, document_id)
+        preview_text = parsed_document.text if parsed_document else ''
+        return Response(
+            content=create_text_preview_svg(document.filename or 'Документ', preview_text),
+            media_type='image/svg+xml',
+            headers={'Cache-Control': 'private, max-age=3600'},
+        )
+    finally:
+        db.close()
+
 
 @app.get(
     "/documents/{document_id}/file",

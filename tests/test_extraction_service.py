@@ -23,7 +23,9 @@ def test_extraction_service_uses_local_backend_by_default(monkeypatch) -> None:
         "extract_contract_key_data",
         fake_extract_contract_key_data,
     )
-    service = ExtractionService(Settings())
+    service = ExtractionService(
+        Settings(_env_file=None, extraction_backend="local")
+    )
 
     result, usage = service.extract(text="text")
 
@@ -34,6 +36,7 @@ def test_extraction_service_uses_local_backend_by_default(monkeypatch) -> None:
 
 def test_extraction_service_routes_to_huggingface_space(monkeypatch) -> None:
     settings = Settings(
+        _env_file=None,
         extraction_backend="huggingface-space",
         hf_space_prompt_mode="compact",
         hf_space_context_mode="retrieved",

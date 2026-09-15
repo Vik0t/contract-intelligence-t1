@@ -367,6 +367,19 @@ class DocumentMetadataResponse(DocumentResponse):
         description="Added metadata information"
     )
 
+
+class DocumentPageResponse(BaseModel):
+    """A readable page of parsed document text for source verification."""
+    number: int
+    text: str
+
+
+class DocumentContentResponse(BaseModel):
+    """Parsed document content grouped by logical or physical pages."""
+    source_format: Optional[str] = None
+    page_count: int
+    pages: List[DocumentPageResponse]
+
 class DocumentListResponse(BaseModel):
     """
     Response model for document list

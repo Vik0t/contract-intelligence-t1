@@ -697,6 +697,63 @@ class TestDocumentEndpoints:
         
         response = client.get(f"/documents/{document_id}", headers=headers2)
         assert response.status_code == 403
+
+    def test_get_document_content_groups_text_by_page(self):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename="content.docx")
+            database.create_parsed_document(
+                db,
+                document.id,
+                "PAGE 1\n\nДоговор № 10",
+                document_ir={
+                    "source_format": "docx",
+                    "pages": [{
+                        "number": 1,
+                        "needs_ocr": False,
+                        "blocks": [{"text": "Договор № 10", "source": "docx", "order": 0}],
+                    }],
+                },
+            )
+            document_id = document.id
+        finally:
+            db.close()
+
+        response = client.get(f"/documents/{document_id}/content", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "source_format": "docx",
+            "page_count": 1,
+            "pages": [{"number": 1, "text": "Договор № 10"}],
+        }
+
+    def test_get_document_preview_returns_lightweight_image(self, tmp_path):
+        headers = get_auth_header()
+        stored_path = tmp_path / "preview.docx"
+        stored_path.write_bytes(b"preview-placeholder")
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(
+                db,
+                owner=user.id,
+                template_id=None,
+                filename="preview.docx",
+                stored_path=str(stored_path),
+            )
+            database.create_parsed_document(db, document.id, "Договор поставки № 42")
+            document_id = document.id
+        finally:
+            db.close()
+
+        response = client.get(f"/documents/{document_id}/preview", headers=headers)
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("image/svg+xml")
+        assert b"preview.docx" in response.content
     
     def test_delete_document_success(self):
         """Test deleting a document"""
