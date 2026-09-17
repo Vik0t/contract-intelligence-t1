@@ -63,6 +63,9 @@ class Document(Base):
     stored_path = Column(String(1024), nullable=True)
     processing_status = Column(String(30), nullable=False, default='uploaded')
     processing_error = Column(Text, nullable=True)
+    review_status = Column(String(20), nullable=False, default='pending')
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(Integer, nullable=True)
     contract_family = Column(String(255), nullable=True)
     is_scan = Column(Boolean, default=False)
     has_tables = Column(Boolean, default=False)
@@ -153,6 +156,12 @@ def create_tables(engine):
             connection.execute(text("ALTER TABLE documents ADD COLUMN processing_status VARCHAR(30) NOT NULL DEFAULT 'uploaded'"))
         if 'processing_error' not in columns:
             connection.execute(text('ALTER TABLE documents ADD COLUMN processing_error TEXT'))
+        if 'review_status' not in columns:
+            connection.execute(text("ALTER TABLE documents ADD COLUMN review_status VARCHAR(20) NOT NULL DEFAULT 'pending'"))
+        if 'reviewed_at' not in columns:
+            connection.execute(text('ALTER TABLE documents ADD COLUMN reviewed_at DATETIME'))
+        if 'reviewed_by' not in columns:
+            connection.execute(text('ALTER TABLE documents ADD COLUMN reviewed_by INTEGER'))
 
 def get_session(engine):
     """Create and return a new database session."""

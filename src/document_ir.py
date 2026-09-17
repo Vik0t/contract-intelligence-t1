@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class SourceFormat(StrEnum):
     PDF = "pdf"
     DOCX = "docx"
+    IMAGE = "image"
 
 class BlockKind(StrEnum):
     PARAGRAPH = "paragraph"
@@ -124,4 +125,3 @@ if __name__ == "__main__":
 
 
     print(document.model_dump_json(indent=2))
-

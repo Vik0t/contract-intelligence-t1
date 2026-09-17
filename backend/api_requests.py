@@ -353,6 +353,14 @@ class DocumentResponse(BaseModel):
         False,
         description="Whether the original file is available"
     )
+    review_status: str = Field(
+        "pending",
+        description="Operator review status"
+    )
+    reviewed_at: Optional[datetime] = Field(
+        None,
+        description="When the operator confirmed the result"
+    )
     created_at: datetime = Field(
         ...,
         description="Document creation timestamp"
@@ -366,6 +374,19 @@ class DocumentMetadataResponse(DocumentResponse):
         None,
         description="Added metadata information"
     )
+
+
+class DocumentPageResponse(BaseModel):
+    """A readable page of parsed document text for source verification."""
+    number: int
+    text: str
+
+
+class DocumentContentResponse(BaseModel):
+    """Parsed document content grouped by logical or physical pages."""
+    source_format: Optional[str] = None
+    page_count: int
+    pages: List[DocumentPageResponse]
 
 class DocumentListResponse(BaseModel):
     """
@@ -620,3 +641,8 @@ class DocumentUpdateRequest(BaseModel):
 class MetadataUpdateRequest(BaseModel):
     """Manually edited document metadata."""
     fields: Dict[str, Any] = Field(..., description="Complete editable metadata object")
+
+
+class DocumentReviewRequest(BaseModel):
+    """Confirm or reopen operator review."""
+    confirmed: bool

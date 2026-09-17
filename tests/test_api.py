@@ -1,8 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime
+import io
 import os
 import sys
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -572,6 +574,24 @@ class TestDocumentEndpoints:
         
         assert response.status_code == 202
         assert response.json()["success"] == True
+
+    def test_upload_photo_document(self):
+        """A phone photo enters the same asynchronous processing workflow."""
+        headers = get_auth_header()
+        buffer = io.BytesIO()
+        Image.new("RGB", (900, 1200), "white").save(buffer, format="JPEG")
+
+        response = client.post(
+            "/documents",
+            headers=headers,
+            files={"file": ("camera.jpg", buffer.getvalue(), "image/jpeg")},
+        )
+
+        assert response.status_code == 202
+        data = response.json()
+        assert data["success"] is True
+        assert data["document"]["filename"] == "camera.jpg"
+        assert data["document"]["review_status"] == "pending"
     
     def test_upload_invalid_file_type(self):
         """Test uploading invalid file type"""
@@ -583,7 +603,7 @@ class TestDocumentEndpoints:
             data={"template_id": None}  
         )
         assert response.status_code == 400
-        assert "unsupported" in response.json()["detail"].lower()
+        assert "поддерживаются" in response.json()["detail"].lower()
     
     def test_upload_no_file(self):
         """Test uploading without file"""
@@ -697,6 +717,63 @@ class TestDocumentEndpoints:
         
         response = client.get(f"/documents/{document_id}", headers=headers2)
         assert response.status_code == 403
+
+    def test_get_document_content_groups_text_by_page(self):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename="content.docx")
+            database.create_parsed_document(
+                db,
+                document.id,
+                "PAGE 1\n\nДоговор № 10",
+                document_ir={
+                    "source_format": "docx",
+                    "pages": [{
+                        "number": 1,
+                        "needs_ocr": False,
+                        "blocks": [{"text": "Договор № 10", "source": "docx", "order": 0}],
+                    }],
+                },
+            )
+            document_id = document.id
+        finally:
+            db.close()
+
+        response = client.get(f"/documents/{document_id}/content", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "source_format": "docx",
+            "page_count": 1,
+            "pages": [{"number": 1, "text": "Договор № 10"}],
+        }
+
+    def test_get_document_preview_returns_lightweight_image(self, tmp_path):
+        headers = get_auth_header()
+        stored_path = tmp_path / "preview.docx"
+        stored_path.write_bytes(b"preview-placeholder")
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(
+                db,
+                owner=user.id,
+                template_id=None,
+                filename="preview.docx",
+                stored_path=str(stored_path),
+            )
+            database.create_parsed_document(db, document.id, "Договор поставки № 42")
+            document_id = document.id
+        finally:
+            db.close()
+
+        response = client.get(f"/documents/{document_id}/preview", headers=headers)
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("image/svg+xml")
+        assert b"preview.docx" in response.content
     
     def test_delete_document_success(self):
         """Test deleting a document"""
@@ -758,6 +835,77 @@ class TestDocumentEndpoints:
 
 class TestMetadataEndpoints:
     """Metadata extraction tests"""
+
+    def test_operator_can_confirm_and_reopen_review(self):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(
+                db,
+                owner=user.id,
+                template_id=None,
+                filename="review.pdf",
+            )
+            database.create_metadata(
+                db,
+                document.id,
+                {"contract_number": {"value": "42"}},
+            )
+            document_id = document.id
+        finally:
+            db.close()
+
+        confirmed = client.patch(
+            f"/documents/{document_id}/review",
+            headers=headers,
+            json={"confirmed": True},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["review_status"] == "reviewed"
+        assert confirmed.json()["reviewed_at"] is not None
+
+        reopened = client.patch(
+            f"/documents/{document_id}/review",
+            headers=headers,
+            json={"confirmed": False},
+        )
+        assert reopened.status_code == 200
+        assert reopened.json()["review_status"] == "pending"
+        assert reopened.json()["reviewed_at"] is None
+
+    def test_metadata_edit_returns_confirmed_document_to_review(self):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(
+                db,
+                owner=user.id,
+                template_id=None,
+                filename="review.pdf",
+            )
+            database.create_metadata(db, document.id, {"contract_number": {"value": "41"}})
+            database.update_document(
+                db,
+                document.id,
+                review_status="reviewed",
+                reviewed_at=datetime.now(),
+                reviewed_by=user.id,
+            )
+            document_id = document.id
+        finally:
+            db.close()
+
+        response = client.patch(
+            f"/documents/{document_id}/metadata",
+            headers=headers,
+            json={"fields": {"contract_number": {"value": "42"}}},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["review_status"] == "pending"
+        assert response.json()["reviewed_at"] is None
     
     def test_extract_metadata_success(self):
         """Test extracting metadata from a parsed document"""
