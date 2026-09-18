@@ -4,6 +4,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.table import Table
+from PIL import Image, ImageOps
 
 from src.document_ir import (
     BlockIR,
@@ -71,6 +72,54 @@ def parse_docx(file_path: str | Path) -> DocumentIR:
     )
 
 
+def parse_image(
+    file_path: str | Path,
+    *,
+    ocr_backend: OCRBackend | None = None,
+) -> DocumentIR:
+    """Преобразует фотографию документа в одностраничный DocumentIR."""
+    path = Path(file_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Файл не найден: {path}")
+    if path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+        raise ValueError("Ожидалось изображение JPG или PNG")
+
+    with Image.open(path) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+        width, height = image.size
+
+    warnings: list[str] = []
+    blocks: list[BlockIR] = []
+    if ocr_backend is None:
+        warnings.append("Фотография требует распознавания текста, но OCR недоступен")
+    else:
+        blocks = ocr_backend.extract_blocks(
+            image,
+            page_number=1,
+            page_width=float(width),
+            page_height=float(height),
+        )
+        if not blocks:
+            warnings.append("На фотографии не удалось распознать текст")
+
+    return DocumentIR(
+        source_format=SourceFormat.IMAGE,
+        source_path=str(path.resolve()),
+        page_count=1,
+        pages=[
+            PageIR(
+                number=1,
+                width=float(width),
+                height=float(height),
+                image_ref=str(path.resolve()),
+                blocks=blocks,
+                needs_ocr=True,
+            )
+        ],
+        warnings=warnings,
+    )
+
+
 def parse_document(
     file_path: str | Path,
     *,
@@ -85,8 +134,10 @@ def parse_document(
         return parse_pdf(path, ocr_backend=ocr_backend, ocr_dpi=ocr_dpi)
     if suffix == ".docx":
         return parse_docx(path)
+    if suffix in {".jpg", ".jpeg", ".png"}:
+        return parse_image(path, ocr_backend=ocr_backend)
 
-    raise ValueError("Поддерживаются только PDF и DOCX")
+    raise ValueError("Поддерживаются PDF, DOCX, JPG и PNG")
 
 
 def document_ir_to_text(

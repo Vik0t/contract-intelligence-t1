@@ -4,6 +4,10 @@ from pathlib import Path
 import zipfile
 
 import pymupdf
+from PIL import Image, UnidentifiedImageError
+
+
+MAX_IMAGE_PIXELS = 40_000_000
 
 
 class UploadValidationError(ValueError):
@@ -49,4 +53,30 @@ def validate_document_file(path: str | Path, extension: str, *, max_pdf_pages: i
             raise UploadValidationError("DOCX повреждён или не может быть прочитан") from exc
         return
 
-    raise UploadValidationError("Поддерживаются только PDF и DOCX")
+    if extension in {".jpg", ".jpeg", ".png"}:
+        expected_format = "JPEG" if extension in {".jpg", ".jpeg"} else "PNG"
+        try:
+            with Image.open(document_path) as image:
+                if image.format != expected_format:
+                    raise UploadValidationError(
+                        f"Расширение файла не соответствует формату {expected_format}"
+                    )
+                width, height = image.size
+                if width < 320 or height < 320:
+                    raise UploadValidationError(
+                        "Фотография слишком маленькая для надёжного распознавания"
+                    )
+                if width * height > MAX_IMAGE_PIXELS:
+                    raise UploadValidationError(
+                        "Фотография слишком большая: максимум 40 мегапикселей"
+                    )
+                image.verify()
+        except UploadValidationError:
+            raise
+        except (UnidentifiedImageError, OSError, ValueError) as exc:
+            raise UploadValidationError(
+                "Фотография повреждена или имеет неподдерживаемый формат"
+            ) from exc
+        return
+
+    raise UploadValidationError("Поддерживаются PDF, DOCX, JPG и PNG")

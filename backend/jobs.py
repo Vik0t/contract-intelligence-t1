@@ -39,6 +39,8 @@ class JobManager:
         )
         self._lock = threading.Lock()
         self._futures: dict[int, Future] = {}
+        self._timers: set[threading.Timer] = set()
+        self._shutdown = False
 
     def enqueue(self, document_id: int, kind: str):
         db = database.get_session(self.engine)
@@ -73,6 +75,8 @@ class JobManager:
 
     def _submit(self, job_id: int) -> None:
         with self._lock:
+            if self._shutdown:
+                return
             future = self._futures.get(job_id)
             if future is not None and not future.done():
                 return
@@ -135,12 +139,26 @@ class JobManager:
             job.error = error[:2000]
             job.available_at = datetime.now() + timedelta(seconds=delay)
             db.commit()
-            timer = threading.Timer(delay, self._submit, args=(job_id,))
-            timer.daemon = True
-            timer.start()
-            return True
+            return self._schedule_retry(job_id, delay)
         finally:
             db.close()
+
+    def _schedule_retry(self, job_id: int, delay: int) -> bool:
+        timer: threading.Timer
+
+        def submit_retry() -> None:
+            with self._lock:
+                self._timers.discard(timer)
+            self._submit(job_id)
+
+        timer = threading.Timer(delay, submit_retry)
+        timer.daemon = True
+        with self._lock:
+            if self._shutdown:
+                return False
+            self._timers.add(timer)
+        timer.start()
+        return True
 
     def _finish(self, job_id: int, *, status: str, error: str | None = None) -> None:
         db = database.get_session(self.engine)
@@ -157,4 +175,10 @@ class JobManager:
             db.close()
 
     def shutdown(self) -> None:
+        with self._lock:
+            self._shutdown = True
+            timers = list(self._timers)
+            self._timers.clear()
+        for timer in timers:
+            timer.cancel()
         self.executor.shutdown(wait=True, cancel_futures=True)

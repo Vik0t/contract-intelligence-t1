@@ -1,5 +1,6 @@
 import pytest
 from docx import Document
+from PIL import Image
 from pydantic import ValidationError
 
 from src.document_ir import (
@@ -42,6 +43,31 @@ def test_docx_is_parsed_to_document_ir(tmp_path) -> None:
         BlockKind.TABLE,
     ]
     assert "Поставщик | ООО Альфа" in parsed.pages[0].blocks[1].text
+
+
+def test_photo_is_parsed_with_ocr_and_orientation(tmp_path) -> None:
+    path = tmp_path / "contract.jpg"
+    Image.new("RGB", (900, 1200), "white").save(path, format="JPEG")
+
+    class FakeOCR:
+        def extract_blocks(self, image, *, page_number, page_width, page_height):
+            assert image.size == (900, 1200)
+            return [
+                BlockIR(
+                    id="photo-ocr",
+                    kind=BlockKind.PARAGRAPH,
+                    text="Договор поставки № 42",
+                    source=BlockSource.OCR,
+                    order=0,
+                )
+            ]
+
+    parsed = parse_document(path, ocr_backend=FakeOCR())
+
+    assert parsed.source_format == SourceFormat.IMAGE
+    assert parsed.page_count == 1
+    assert parsed.pages[0].needs_ocr is True
+    assert document_ir_to_text(parsed) == "PAGE 1\n\nДоговор поставки № 42"
 
 
 def test_document_text_prefers_ocr_on_scanned_page() -> None:
