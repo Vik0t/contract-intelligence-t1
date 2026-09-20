@@ -247,14 +247,20 @@ function deriveRisks(fields) {
   return risks;
 }
 
-function SummaryPanel({ fields }) {
-  const summary = buildSummary(fields);
+function SummaryPanel({ fields, summary }) {
+  const derived = buildSummary(fields);
   return (
     <div className="summary-panel">
       <p className="panel-kicker">Краткая сводка</p>
-      <p className="summary-intro">{summary.intro}</p>
-      <dl>{summary.facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-      <p className="panel-note">Сводка составлена по извлечённым полям. Полная смысловая суммаризация будет добавлена вместе с анализом всех пунктов договора.</p>
+      {summary ? (
+        <p className="summary-ai-text">{summary}</p>
+      ) : (
+        <>
+          <p className="summary-intro">{derived.intro}</p>
+          <dl>{derived.facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+          <p className="panel-note">Автоматическая сводка недоступна — показана сводка по извлечённым полям.</p>
+        </>
+      )}
     </div>
   );
 }
@@ -418,7 +424,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
             <div className="review-content">
               {editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : null}
               {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
-              {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} /> : null}
+              {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} /> : null}
               {!editing && activeTab === 'risks' ? <RisksPanel fields={fields} onSelectSource={setSelectedSource} /> : null}
             </div>
           </aside>
