@@ -26,6 +26,7 @@ from backend.extraction import ExtractionService
 from backend.jobs import JobManager
 
 from src.local_extraction import extract_text_from_document
+from src.extraction.summary import summarize_document
 
 settings = get_settings()
 EXTRACTION_SERVICE = ExtractionService(settings)
@@ -196,6 +197,7 @@ def create_metadata_response(metadata):
         id=metadata.id,
         document_id=metadata.document_id,
         fields=metadata.fields,
+        summary=getattr(metadata, 'summary', None),
         created_at=metadata.created_at
     )
 
@@ -382,6 +384,23 @@ def process_metadata_extraction(document_id: int):
                 fields=extracted_data
             )
             logger.info(f"Metadata saved for document {document_id}")
+
+            # Суммаризация — отдельный, не критичный для основного статуса шаг.
+            # Если HF API недоступен/лимитирован, документ всё равно должен
+            # остаться в статусе 'extracted' с полями, просто без summary.
+            try:
+                summary_text = summarize_document(parsed_doc.text, extracted_data)
+                database.update_metadata(
+                    db,
+                    document_id=document_id,
+                    fields=extracted_data,
+                    summary=summary_text
+                )
+                logger.info(f"Summary saved for document {document_id}")
+            except Exception as summary_exc:
+                logger.warning(
+                    f"Summary generation failed for document {document_id}: {summary_exc}"
+                )
 
             existing_stats = database.get_stats(db, document_id=document_id)
             if existing_stats:

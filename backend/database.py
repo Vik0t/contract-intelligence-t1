@@ -79,6 +79,7 @@ class DocumentMetadata(Base):
     id = Column(Integer, primary_key=True)
     document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), unique=True, nullable=False)
     fields = Column(JSON, nullable=False)
+    summary = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
 class Stats(Base):
@@ -162,6 +163,11 @@ def create_tables(engine):
             connection.execute(text('ALTER TABLE documents ADD COLUMN reviewed_at DATETIME'))
         if 'reviewed_by' not in columns:
             connection.execute(text('ALTER TABLE documents ADD COLUMN reviewed_by INTEGER'))
+
+    metadata_columns = {column['name'] for column in inspect(engine).get_columns('document_metadata')}
+    with engine.begin() as connection:
+        if 'summary' not in metadata_columns:
+            connection.execute(text('ALTER TABLE document_metadata ADD COLUMN summary TEXT'))
 
 def get_session(engine):
     """Create and return a new database session."""
@@ -426,9 +432,9 @@ def delete_document(session, document_id):
 
 # ============ METADATA OPERATIONS ============
 
-def create_metadata(session, document_id, fields):
+def create_metadata(session, document_id, fields, summary=None):
     """Create document metadata."""
-    metadata = DocumentMetadata(document_id=document_id, fields=fields)
+    metadata = DocumentMetadata(document_id=document_id, fields=fields, summary=summary)
     session.add(metadata)
     session.commit()
     return metadata
@@ -444,14 +450,16 @@ def get_metadata_by_period(session, start_date, end_date):
         DocumentMetadata.created_at <= end_date
     ).all()
 
-def update_metadata(session, document_id, fields):
+def update_metadata(session, document_id, fields, summary=None):
     """Update or create document metadata."""
     metadata = get_metadata(session, document_id)
     if metadata:
         metadata.fields = fields
+        if summary is not None:
+            metadata.summary = summary
         session.commit()
     else:
-        metadata = create_metadata(session, document_id, fields)
+        metadata = create_metadata(session, document_id, fields, summary=summary)
     return metadata
 
 def delete_metadata(session, document_id):

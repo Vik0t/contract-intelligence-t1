@@ -461,6 +461,10 @@ class MetadataResponse(BaseModel):
         ...,
         description="Metadata fields and values"
     )
+    summary: Optional[str] = Field(
+        None,
+        description="AI-generated plain-language summary of the contract"
+    )
     created_at: datetime = Field(
         ...,
         description="Metadata creation timestamp"
