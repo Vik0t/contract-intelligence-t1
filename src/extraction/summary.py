@@ -225,7 +225,7 @@ def summarize_document(
         model=SUMMARY_MODEL_NAME,
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_new_tokens,
-        temperature=0.7,
+        temperature=0.4,
     )
 
     if not response.choices:
