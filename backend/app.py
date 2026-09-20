@@ -1056,6 +1056,26 @@ async def update_document_metadata(
             document_id=document.id,
             fields=metadata_data.fields
         )
+
+        # Поля отредактированы вручную — пересобираем summary, чтобы он не
+        # расходился с тем, что реально сохранено. Тот же принцип, что и при
+        # первичном извлечении: сбой суммаризации не должен блокировать
+        # сохранение отредактированных полей.
+        try:
+            parsed_doc = database.get_parsed_document(db, document.id)
+            summary_text = summarize_document(
+                parsed_doc.text if parsed_doc else "",
+                metadata_data.fields
+            )
+            metadata = database.update_metadata(
+                db,
+                document_id=document.id,
+                fields=metadata_data.fields,
+                summary=summary_text
+            )
+        except Exception as summary_exc:
+            logger.warning(f"Summary refresh failed for document {document.id}: {summary_exc}")
+
         database.update_document(
             db,
             document.id,
