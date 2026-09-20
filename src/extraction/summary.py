@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 import logging
 import os
 from typing import Any
@@ -13,9 +14,21 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Переключатель бэкенда суммаризации
+# "api" (по умолчанию) — вызов через HF Inference API
+# "local" — загрузка модели на эту машину через transformers
+
+SUMMARY_BACKEND_ENV = "SUMMARY_BACKEND"
+
 SUMMARY_MODEL_NAME = os.environ.get(
     "SUMMARY_MODEL_NAME",
     "Qwen/Qwen2.5-7B-Instruct:featherless-ai",
+)
+
+# Модель для локального инференса 
+SUMMARY_LOCAL_MODEL_NAME = os.environ.get(
+    "SUMMARY_LOCAL_MODEL_NAME",
+    "Qwen/Qwen2.5-3B-Instruct",
 )
 
 # Сколько символов документа максимум отправляем в модель.
@@ -23,6 +36,16 @@ SUMMARY_MAX_INPUT_CHARS = int(os.environ.get("SUMMARY_MAX_INPUT_CHARS", "4000"))
 
 # Сколько токенов модель может сгенерировать в ответе.
 SUMMARY_MAX_NEW_TOKENS = int(os.environ.get("SUMMARY_MAX_NEW_TOKENS", "300"))
+
+
+def summary_backend() -> str:
+    """Возвращает выбранный бэкенд суммаризации: 'api' или 'local'."""
+    requested = os.getenv(SUMMARY_BACKEND_ENV, "api").strip().lower()
+    if requested not in {"api", "local"}:
+        raise ValueError(
+            f"{SUMMARY_BACKEND_ENV} must be 'api' or 'local', got {requested!r}"
+        )
+    return requested
 
 
 SUMMARY_PROMPT_TEMPLATE = """Ты — русскоязычный юридический ассистент. Твоя задача — кратко описать суть договора.
@@ -33,22 +56,17 @@ SUMMARY_PROMPT_TEMPLATE = """Ты — русскоязычный юридиче�
 Текст документа (может быть обрезан):
 {document_text}
 
-Задача: сформулируй 5 предложений на русском, которые ясно объясняют,
-о чём этот договор — предмет договора, кто стороны, ключевая сумма/условие,
-срок действия. Используй ТОЛЬКО РУССКИЙ язык, другие запрещены.
+Задача: сформулируй 5-7 предложений на русском, которые ясно объясняют,
+о чём этот договор — предмет договора, кто стороны, ключевая сумма,
+срок действия и наиболее важные условия. Используй ТОЛЬКО РУССКИЙ язык, ДРУГИЕ ЗАПРЕЩЕНЫ.
 Опирайся в первую очередь на извлечённые поля (они уже проверены),
-текст используй только как дополнительный контекст.
-Не придумывай факты, которых нет ни в полях, ни в тексте.
+текст используй как дополнительный контекст и источник информации об условиях.
+Не придумывай факты, которых нет ни в полях, ни в тексте. Пиши грамматически и синтаксически правильно.
 Ответь только текстом summary, без вступлений вроде "Вот summary:".
 """
 
 
 def _get_client() -> InferenceClient:
-    """Создаёт InferenceClient с токеном из окружения.
-
-    Модель передаётся не здесь, а в chat.completions.create(...), чтобы
-    можно было менять её без пересоздания клиента.
-    """
     token = os.environ.get("HF_TOKEN")
     if not token:
         raise RuntimeError(
@@ -59,8 +77,72 @@ def _get_client() -> InferenceClient:
     return InferenceClient(token=token)
 
 
+@lru_cache(maxsize=1)
+def _load_local_summary_model():
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    import torch
+
+    logger.info("Loading local summary model: %s", SUMMARY_LOCAL_MODEL_NAME)
+
+    tokenizer = AutoTokenizer.from_pretrained(SUMMARY_LOCAL_MODEL_NAME)
+
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        dtype = torch.float16
+    else:
+        device = "cpu"
+        dtype = torch.float32
+
+    model = AutoModelForCausalLM.from_pretrained(
+        SUMMARY_LOCAL_MODEL_NAME,
+        dtype=dtype,
+        device_map=device,
+        low_cpu_mem_usage=True,
+    ).eval()
+
+    logger.info("Local summary model loaded on device=%s, dtype=%s", device, dtype)
+    return model, tokenizer
+
+
+def unload_local_summary_model() -> None:
+    _load_local_summary_model.cache_clear()
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+
+def _summarize_local(prompt: str, max_new_tokens: int) -> str:
+    import torch
+
+    model, tokenizer = _load_local_summary_model()
+
+    messages = [{"role": "user", "content": prompt}]
+    input_ids = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, return_tensors="pt"
+    ).to(model.device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+        )
+
+    generated = output_ids[0][input_ids.shape[-1]:]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
 def _format_fields_block(extracted_fields: dict[str, Any]) -> str:
-    """Превращает словарь извлечённых полей в читаемый для модели текст."""
     if not extracted_fields:
         return "(поля не извлечены)"
 
@@ -99,7 +181,7 @@ def summarize_document(
             По умолчанию — SUMMARY_MAX_NEW_TOKENS из .env или 300.
 
     Returns:
-        Строка с 4-5 предложениями summary на русском.
+        Строка с 5-7 предложениями summary на русском.
 
     Raises:
         RuntimeError: если HF_TOKEN не задан в окружении.
@@ -111,8 +193,6 @@ def summarize_document(
     if max_new_tokens is None:
         max_new_tokens = SUMMARY_MAX_NEW_TOKENS
 
-    client = _get_client()
-
     truncated_text = (document_text or "")[:max_input_chars]
     fields_block = _format_fields_block(extracted_fields)
 
@@ -121,8 +201,21 @@ def summarize_document(
         document_text=truncated_text or "(текст не передан)",
     )
 
+    backend = summary_backend()
+
+    if backend == "local":
+        logger.debug(
+            "Summarize request (local): model=%s, prompt_chars=%d, max_new_tokens=%d",
+            SUMMARY_LOCAL_MODEL_NAME,
+            len(prompt),
+            max_new_tokens,
+        )
+        return _summarize_local(prompt, max_new_tokens)
+
+    client = _get_client()
+
     logger.debug(
-        "Summarize request: model=%s, prompt_chars=%d, max_new_tokens=%d",
+        "Summarize request (api): model=%s, prompt_chars=%d, max_new_tokens=%d",
         SUMMARY_MODEL_NAME,
         len(prompt),
         max_new_tokens,
@@ -132,7 +225,7 @@ def summarize_document(
         model=SUMMARY_MODEL_NAME,
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_new_tokens,
-        temperature=0.5,
+        temperature=0.7,
     )
 
     if not response.choices:
