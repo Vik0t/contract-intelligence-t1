@@ -6,7 +6,7 @@ from functools import lru_cache
 import logging
 import os
 from typing import Any
-
+from openai import OpenAI
 from huggingface_hub import InferenceClient
 from dotenv import load_dotenv
 
@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 # Переключатель бэкенда суммаризации
 # "api" (по умолчанию) — вызов через HF Inference API
 # "local" — загрузка модели на эту машину через transformers
+client = OpenAI(
+    base_url="https://deepcode.ci.nsu.ru/api/v1",
+    api_key= os.environ.get("OPENROUTER_API_KEY")
+)
+
+
 
 SUMMARY_BACKEND_ENV = "SUMMARY_BACKEND"
 
@@ -222,12 +228,12 @@ def summarize_document(
     )
 
     response = client.chat.completions.create(
-        model=SUMMARY_MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_new_tokens,
-        temperature=0.4,
-    )
+    model="deepseek-ai/DeepSeek-V4-Flash-0731", 
+    messages=[{"role": "system", "content": "напиши нгту шарага"}],
+    max_tokens=max_new_tokens,
+    temperature=0.4)
 
+   
     if not response.choices:
         raise RuntimeError(
             f"HF Inference вернул пустой choices для модели {SUMMARY_MODEL_NAME}"
