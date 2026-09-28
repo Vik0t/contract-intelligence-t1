@@ -1,7 +1,8 @@
-from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean, Index, inspect, text
+from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean, Index, inspect, text, or_, cast
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
 from datetime import datetime, timedelta
+import json
 import secrets
 
 Base = declarative_base()
@@ -80,6 +81,7 @@ class DocumentMetadata(Base):
     document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), unique=True, nullable=False)
     fields = Column(JSON, nullable=False)
     summary = Column(Text, nullable=True)
+    risks = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
 class Stats(Base):
@@ -127,7 +129,15 @@ class ProcessingJob(Base):
 
 def get_engine(db_path='sqlite:///documents.db'):
     """Create and return SQLAlchemy engine."""
-    engine_kwargs = {"echo": False, "pool_pre_ping": True}
+    engine_kwargs = {
+        "echo": False,
+        "pool_pre_ping": True,
+        # ensure_ascii=False: без этого json.dumps по умолчанию экранирует
+        # кириллицу в \uXXXX-последовательности, и substring-поиск по
+        # DocumentMetadata.fields (ILIKE на кириллице) никогда не находит
+        # совпадений, хотя сами данные на месте.
+        "json_serializer": lambda obj: json.dumps(obj, ensure_ascii=False),
+    }
     if 'sqlite' in db_path:
         engine_kwargs["connect_args"] = {"check_same_thread": False}
     engine = create_engine(db_path, **engine_kwargs)
@@ -168,6 +178,8 @@ def create_tables(engine):
     with engine.begin() as connection:
         if 'summary' not in metadata_columns:
             connection.execute(text('ALTER TABLE document_metadata ADD COLUMN summary TEXT'))
+        if 'risks' not in metadata_columns:
+            connection.execute(text('ALTER TABLE document_metadata ADD COLUMN risks JSON'))
 
 def get_session(engine):
     """Create and return a new database session."""
@@ -340,13 +352,25 @@ def get_documents_by_owner(session, owner_id):
 
 def get_documents_by_owner_paginated(session, owner_id, page=1, limit=50,
                                      folder_id=None, search=None):
-    """Get paginated documents for a specific owner."""
+    """Get paginated documents for a specific owner.
+
+    search matches both the filename and the extracted metadata fields
+    (JSON column, matched as serialized text — simple substring search,
+    not a structured per-field lookup).
+    """
     offset = (page - 1) * limit
     query = session.query(Document).filter(Document.owner == owner_id)
     if folder_id is not None:
         query = query.filter(Document.folder_id == folder_id)
     if search:
-        query = query.filter(Document.filename.ilike(f'%{search}%'))
+        query = query.outerjoin(
+            DocumentMetadata, DocumentMetadata.document_id == Document.id
+        ).filter(
+            or_(
+                Document.filename.ilike(f'%{search}%'),
+                cast(DocumentMetadata.fields, String).ilike(f'%{search}%'),
+            )
+        )
     total = query.count()
     documents = query.order_by(Document.created_at.desc()).offset(offset).limit(limit).all()
     return documents, total
@@ -432,9 +456,9 @@ def delete_document(session, document_id):
 
 # ============ METADATA OPERATIONS ============
 
-def create_metadata(session, document_id, fields, summary=None):
+def create_metadata(session, document_id, fields, summary=None, risks=None):
     """Create document metadata."""
-    metadata = DocumentMetadata(document_id=document_id, fields=fields, summary=summary)
+    metadata = DocumentMetadata(document_id=document_id, fields=fields, summary=summary, risks=risks)
     session.add(metadata)
     session.commit()
     return metadata
@@ -450,16 +474,18 @@ def get_metadata_by_period(session, start_date, end_date):
         DocumentMetadata.created_at <= end_date
     ).all()
 
-def update_metadata(session, document_id, fields, summary=None):
+def update_metadata(session, document_id, fields, summary=None, risks=None):
     """Update or create document metadata."""
     metadata = get_metadata(session, document_id)
     if metadata:
         metadata.fields = fields
         if summary is not None:
             metadata.summary = summary
+        if risks is not None:
+            metadata.risks = risks
         session.commit()
     else:
-        metadata = create_metadata(session, document_id, fields, summary=summary)
+        metadata = create_metadata(session, document_id, fields, summary=summary, risks=risks)
     return metadata
 
 def delete_metadata(session, document_id):
