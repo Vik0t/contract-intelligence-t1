@@ -387,6 +387,13 @@ class DocumentContentResponse(BaseModel):
     source_format: Optional[str] = None
     page_count: int
     pages: List[DocumentPageResponse]
+    visual_page_count: Optional[int] = None
+    visual_error: Optional[str] = None
+
+
+class SourceLocationRequest(BaseModel):
+    evidence: str = Field(min_length=4, max_length=4000)
+    page: Optional[int] = Field(default=None, ge=1)
 
 class DocumentListResponse(BaseModel):
     """
@@ -465,6 +472,7 @@ class MetadataResponse(BaseModel):
         None,
         description="AI-generated plain-language summary of the contract"
     )
+    risks: Optional[List[Dict[str, Any]]] = None
     created_at: datetime = Field(
         ...,
         description="Metadata creation timestamp"

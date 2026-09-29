@@ -148,7 +148,7 @@ function highlightEvidence(text, evidence) {
   if (!evidence) return text;
   const index = text.toLocaleLowerCase('ru').indexOf(evidence.toLocaleLowerCase('ru'));
   if (index < 0) return text;
-  return <>{text.slice(0, index)}<mark>{text.slice(index, index + evidence.length)}</mark>{text.slice(index + evidence.length)}</>;
+  return <>{text.slice(0, index)}<mark data-evidence="true">{text.slice(index, index + evidence.length)}</mark>{text.slice(index + evidence.length)}</>;
 }
 
 function DocumentPhoto({ document, token }) {
@@ -175,15 +175,95 @@ function DocumentPhoto({ document, token }) {
   return <img className="document-photo" src={imageUrl} alt={`Фотография документа ${document.filename || ''}`} />;
 }
 
-function DocumentPages({ content, document, loading, selectedSource, token }) {
+function RenderedPage({ documentId, number, token, location, onPageRef }) {
+  const pageRef = useRef(null);
+  const markRef = useRef(null);
+  const [visible, setVisible] = useState(false);
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '800px' });
+    if (pageRef.current) observer.observe(pageRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    const controller = new AbortController();
+    let url = '';
+    requestBlob(`/documents/${documentId}/pages/${number}/image`, token, controller.signal)
+      .then((blob) => {
+        url = URL.createObjectURL(blob);
+        setImageUrl(url);
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [documentId, number, token, visible]);
+
+  useEffect(() => {
+    if (!location || !imageLoaded || !markRef.current) return;
+    const frame = requestAnimationFrame(() => markRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' }));
+    return () => cancelAnimationFrame(frame);
+  }, [imageLoaded, location]);
+
+  return (
+    <article className="document-page rendered-page" ref={(node) => { pageRef.current = node; onPageRef(number, node); }}>
+      <div className="page-number">Страница {number}</div>
+      <div className="rendered-page-canvas">
+        {imageUrl ? <img src={imageUrl} onLoad={() => setImageLoaded(true)} alt={`Страница ${number} исходного документа`} /> : <div className="rendered-page-placeholder">{failed ? 'Не удалось показать страницу' : 'Открываем страницу…'}</div>}
+        {imageUrl && location?.rects?.map((rect, index) => (
+          <mark
+            key={index}
+            ref={index === 0 ? markRef : undefined}
+            className="source-highlight"
+            style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}
+            aria-label={index === 0 ? 'Найденный фрагмент' : undefined}
+          />
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function DocumentPages({ content, document, loading, selectedSource, location, token }) {
   const pageRefs = useRef(new Map());
   useEffect(() => {
-    if (!selectedSource?.page) return;
-    pageRefs.current.get(Number(selectedSource.page))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [selectedSource]);
+    if (location?.page) {
+      pageRefs.current.get(location.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!selectedSource || content?.visual_page_count) return;
+    const page = pageRefs.current.get(Number(selectedSource.page) || 1);
+    if (!page) return;
+    if (content?.source_format === 'image') page.querySelector('.photo-transcript')?.setAttribute('open', '');
+    requestAnimationFrame(() => {
+      (page.querySelector('[data-evidence]') || page).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, [selectedSource, content, location]);
 
   if (loading) return <div className="document-loading">Открываем текст документа…</div>;
   if (!content?.pages?.length) return <div className="document-loading">Текст для просмотра недоступен. Откройте оригинал документа.</div>;
+  if (content.visual_page_count) {
+    return (
+      <div className="document-pages visual-document-pages">
+        {Array.from({ length: content.visual_page_count }, (_, index) => (
+          <RenderedPage key={index + 1} documentId={document.id} number={index + 1} token={token} location={location?.page === index + 1 ? location : null} onPageRef={(number, node) => { if (node) pageRefs.current.set(number, node); else pageRefs.current.delete(number); }} />
+        ))}
+      </div>
+    );
+  }
   if (content.source_format === 'image') {
     const page = content.pages[0];
     return (
@@ -247,11 +327,12 @@ function deriveRisks(fields) {
   return risks;
 }
 
-function SummaryPanel({ fields, summary }) {
+function SummaryPanel({ fields, summary, onRefresh, refreshing, insightError }) {
   const derived = buildSummary(fields);
   return (
     <div className="summary-panel">
-      <p className="panel-kicker">Краткая сводка</p>
+      <div className="insights-heading"><p className="panel-kicker">Краткая сводка</p><button type="button" className="source-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Анализируем…' : summary ? 'Обновить анализ' : 'Создать сводку'}</button></div>
+      {insightError ? <p className="insights-error" role="alert">{insightError}</p> : null}
       {summary ? (
         <p className="summary-ai-text">{summary}</p>
       ) : (
@@ -265,11 +346,13 @@ function SummaryPanel({ fields, summary }) {
   );
 }
 
-function RisksPanel({ fields, onSelectSource }) {
-  const risks = deriveRisks(fields);
+function RisksPanel({ fields, savedRisks, onSelectSource, onRefresh, refreshing, insightError }) {
+  const risks = Array.isArray(savedRisks) ? savedRisks : deriveRisks(fields);
   return (
     <div className="risks-panel">
-      <div className="risk-disclaimer">Предварительная проверка по извлечённым данным. Не заменяет юридическую экспертизу.</div>
+      <div className="insights-heading"><span className="panel-kicker">Предварительный анализ</span><button type="button" className="source-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Проверяем…' : savedRisks === null || savedRisks === undefined ? 'Проверить договор' : 'Обновить анализ'}</button></div>
+      {insightError ? <p className="insights-error" role="alert">{insightError}</p> : null}
+      <div className="risk-disclaimer">{Array.isArray(savedRisks) ? 'Риски найдены по тексту договора. Проверьте цитату в оригинале. Не заменяет юридическую экспертизу.' : 'Пока показаны подсказки по полям. Для анализа текста договора нажмите «Проверить договор».'}</div>
       {risks.length ? risks.map((risk) => (
         <section className="risk-row" key={risk.title}>
           <span className="risk-level">Проверить</span>
@@ -277,14 +360,18 @@ function RisksPanel({ fields, onSelectSource }) {
           <p>{risk.body}</p>
           <SourceButton evidence={risk.evidence} page={risk.page} onSelect={onSelectSource} />
         </section>
-      )) : <div className="empty-panel"><strong>По доступным полям явных сигналов нет</strong><span>Для полноценного анализа рисков потребуется проверка всех пунктов договора.</span></div>}
+      )) : <div className="empty-panel"><strong>{Array.isArray(savedRisks) ? 'По доступному тексту риски не найдены' : 'По доступным полям явных сигналов нет'}</strong><span>{Array.isArray(savedRisks) ? 'Оператору всё равно стоит просмотреть важные условия договора.' : 'Для полноценного анализа нажмите «Проверить договор».'}</span></div>}
     </div>
   );
 }
 
-export default function DocumentWorkspace({ document, token, error, onBack, onOpenFile, onAnalyze, onSaveMetadata, onReview }) {
+export default function DocumentWorkspace({ document, token, error, onBack, onOpenFile, onAnalyze, onSaveMetadata, onReview, onRefreshInsights }) {
   const [activeTab, setActiveTab] = useState('fields');
   const [selectedSource, setSelectedSource] = useState(null);
+  const [sourceLocation, setSourceLocation] = useState(null);
+  const [sourceError, setSourceError] = useState('');
+  const [refreshingInsights, setRefreshingInsights] = useState(false);
+  const [insightError, setInsightError] = useState('');
   const [content, setContent] = useState(null);
   const [contentLoading, setContentLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -295,7 +382,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
   const noticeTimeoutRef = useRef(null);
   const fields = document.metadata?.fields ?? {};
   const reviewCount = useMemo(() => orderedEntries(fields).filter(([key, field]) => fieldNeedsReview(key, field)).length, [fields]);
-  const riskCount = useMemo(() => deriveRisks(fields).length, [fields]);
+  const riskCount = useMemo(() => Array.isArray(document.metadata?.risks) ? document.metadata.risks.length : deriveRisks(fields).length, [document.metadata?.risks, fields]);
 
   useEffect(() => {
     setEditing(false);
@@ -311,6 +398,22 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
       .finally(() => { if (!controller.signal.aborted) setContentLoading(false); });
     return () => controller.abort();
   }, [document.has_metadata, document.id, document.status, token]);
+
+  useEffect(() => {
+    setSourceLocation(null);
+    setSourceError('');
+    if (!selectedSource?.evidence || !content?.visual_page_count) return undefined;
+    const controller = new AbortController();
+    request(`/documents/${document.id}/source-location`, {
+      method: 'POST', headers: authHeaders(token), signal: controller.signal,
+      body: JSON.stringify({ evidence: selectedSource.evidence, page: selectedSource.page || null }),
+    })
+      .then(setSourceLocation)
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') setSourceError('Цитату не удалось точно найти на странице. Проверьте исходный документ вручную.');
+      });
+    return () => controller.abort();
+  }, [selectedSource, content, document.id, token]);
 
   useEffect(() => () => {
     if (noticeTimeoutRef.current) window.clearTimeout(noticeTimeoutRef.current);
@@ -371,6 +474,20 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
     }
   };
 
+  const refreshInsights = async () => {
+    setRefreshingInsights(true);
+    setInsightError('');
+    try {
+      const result = await onRefreshInsights(document);
+      if (result.errors?.length) setInsightError(result.errors.join(' '));
+      else showNotice('Сводка и риски обновлены');
+    } catch {
+      setInsightError('Не удалось обновить анализ. Повторите попытку позже.');
+    } finally {
+      setRefreshingInsights(false);
+    }
+  };
+
   const hasMetadata = document.has_metadata && document.metadata?.fields;
   const canStartAnalysis = document.status === 'ready' || document.status === 'failed';
   return (
@@ -424,13 +541,15 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
             <div className="review-content">
               {editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : null}
               {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
-              {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} /> : null}
-              {!editing && activeTab === 'risks' ? <RisksPanel fields={fields} onSelectSource={setSelectedSource} /> : null}
+              {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
+              {!editing && activeTab === 'risks' ? <RisksPanel fields={fields} savedRisks={document.metadata?.risks} onSelectSource={setSelectedSource} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
             </div>
           </aside>
           <section className="document-panel" aria-label="Текст договора">
-            <div className="document-panel-heading"><strong>Документ</strong><span>{content?.page_count ? `${content.page_count} стр.` : ''}</span></div>
-            <DocumentPages content={content} document={document} loading={contentLoading} selectedSource={selectedSource} token={token} />
+            <div className="document-panel-heading"><strong>Документ</strong><span>{content?.visual_page_count || content?.page_count ? `${content.visual_page_count || content.page_count} стр.` : ''}</span></div>
+            {sourceError ? <p className="source-location-error" role="status">{sourceError}</p> : null}
+            {content?.visual_error ? <p className="source-location-error" role="status">{content.visual_error}. Показан извлечённый текст.</p> : null}
+            <DocumentPages content={content} document={document} loading={contentLoading} selectedSource={selectedSource} location={sourceLocation} token={token} />
           </section>
         </div>
       )}

@@ -906,6 +906,37 @@ class TestMetadataEndpoints:
         assert response.status_code == 200
         assert response.json()["review_status"] == "pending"
         assert response.json()["reviewed_at"] is None
+
+    def test_refresh_insights_saves_summary_and_risks(self, monkeypatch):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename="insights.pdf")
+            database.create_parsed_document(db, document.id, "PAGE 1\n\nДоговор продлевается автоматически")
+            database.create_metadata(db, document.id, {"contract_number": {"value": "12"}})
+            document_id = document.id
+        finally:
+            db.close()
+
+        monkeypatch.setattr(app_module, "summarize_document", lambda *_args: "Договор с автоматическим продлением.")
+        monkeypatch.setattr(app_module, "analyze_risks", lambda *_args: [{
+            "title": "Автопродление", "body": "Проверьте срок отказа.",
+            "evidence": "Договор продлевается автоматически", "page": 1,
+        }])
+        response = client.post(f"/documents/{document_id}/insights", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["errors"] == []
+        assert response.json()["metadata"]["summary"] == "Договор с автоматическим продлением."
+        assert response.json()["metadata"]["risks"][0]["title"] == "Автопродление"
+
+        edited = client.patch(
+            f"/documents/{document_id}/metadata", headers=headers,
+            json={"fields": {"contract_number": {"value": "13"}}},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["metadata"]["summary"] is None
+        assert edited.json()["metadata"]["risks"] is None
     
     def test_extract_metadata_success(self):
         """Test extracting metadata from a parsed document"""

@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     hf_space_context_mode: Literal["full", "retrieved"] = "retrieved"
     hf_space_context_chars: int = Field(default=3000, ge=500, le=10000)
     hf_space_reasoning: bool = False
+    hf_extraction_fallback_enabled: bool = True
+    hf_extraction_fallback_model: str = "Qwen/Qwen2.5-7B-Instruct:featherless-ai"
 
     @property
     def upload_limit_bytes(self) -> int:

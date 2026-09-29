@@ -192,6 +192,13 @@ label { color: var(--ink); font-size: 12px; font-weight: 750; letter-spacing: 0.
 .document-panel-heading span { color: var(--muted); font-size: 12px; }
 .document-pages { display: grid; gap: 22px; padding: 24px; }
 .document-page { width: min(760px, 100%); min-height: 88vh; margin: 0 auto; scroll-margin-top: 58px; border: 1px solid #d3d9dc; padding: 54px 60px; background: #fff; box-shadow: 0 4px 16px rgba(27, 37, 43, 0.08); }
+.rendered-page { min-height: 0; padding: 0; }
+.rendered-page .page-number { margin: 0; border-bottom: 1px solid var(--line-soft); padding: 11px 16px; background: #fff; }
+.rendered-page-canvas { position: relative; width: 100%; line-height: 0; }
+.rendered-page-canvas img { display: block; width: 100%; height: auto; }
+.rendered-page-placeholder { min-height: 420px; display: grid; place-items: center; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.source-highlight { position: absolute; z-index: 1; border: 2px solid #d38900; border-radius: 2px; background: rgba(255, 213, 66, 0.54); pointer-events: none; scroll-margin: 95px; }
+.source-location-error { margin: 0; border-bottom: 1px solid #e9d2a4; padding: 12px 20px; color: #805400; background: #fff8ec; font-size: 13px; line-height: 1.4; }
 .photo-document-page { min-height: 0; padding: 22px; }
 .document-photo { width: 100%; max-height: calc(100vh - 330px); display: block; object-fit: contain; background: #f3f5f6; }
 .photo-loading { min-height: 420px; display: grid; place-items: center; color: var(--muted); background: var(--surface); }
@@ -218,6 +225,10 @@ label { color: var(--ink); font-size: 12px; font-weight: 750; letter-spacing: 0.
 .party-editor-row .danger-link { grid-column: 1 / -1; justify-self: start; }
 .field-hint { color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: 0; text-transform: none; }
 .summary-panel, .risks-panel { padding: 24px 20px; }
+.insights-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.insights-heading .panel-kicker { margin: 0; }
+.insights-heading button { flex: 0 0 auto; }
+.insights-error { border-left: 3px solid var(--danger); padding: 10px 12px; color: var(--ink); background: #fff2f2; font-size: 13px; line-height: 1.45; }
 .panel-kicker, .risk-level { color: var(--blue-dark); font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
 .summary-intro { margin-bottom: 26px; font-size: 23px; line-height: 1.38; }
 .summary-ai-text { margin: 0; font-size: 16px; line-height: 1.6; color: var(--ink); text-align: justify; text-justify: inter-word; }

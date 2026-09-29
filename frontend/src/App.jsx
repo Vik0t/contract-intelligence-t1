@@ -142,6 +142,27 @@ export default function App() {
     return () => { cancelled = true; };
   }, [clearSession, documents, selectedDocument, token]);
 
+  const waitingForInsights = Boolean(selectedDocument?.has_metadata && (!selectedDocument.metadata?.summary || !Array.isArray(selectedDocument.metadata?.risks)));
+  useEffect(() => {
+    if (!token || !selectedDocument?.id || !waitingForInsights) return undefined;
+    const documentId = selectedDocument.id;
+    const started = Date.now();
+    let cancelled = false;
+    const intervalId = window.setInterval(async () => {
+      if (Date.now() - started > 125_000) {
+        window.clearInterval(intervalId);
+        return;
+      }
+      try {
+        const updated = await request(`/documents/${documentId}`, { headers: authHeaders(token) });
+        if (!cancelled) setSelectedDocument((current) => current?.id === documentId ? updated : current);
+      } catch (requestError) {
+        if (!cancelled && requestError.status === 401) clearSession();
+      }
+    }, 5000);
+    return () => { cancelled = true; window.clearInterval(intervalId); };
+  }, [clearSession, selectedDocument?.id, token, waitingForInsights]);
+
   const updateAuthField = (event) => {
     const { name, value } = event.target;
     setAuthForm((current) => ({ ...current, [name]: value }));
@@ -279,6 +300,19 @@ export default function App() {
     }
   };
 
+  const refreshDocumentInsights = async (document) => {
+    try {
+      const result = await request(`/documents/${document.id}/insights`, { method: 'POST', headers: authHeaders(token) });
+      const updated = await request(`/documents/${document.id}`, { headers: authHeaders(token) });
+      setSelectedDocument(updated);
+      return result;
+    } catch (requestError) {
+      if (requestError.status === 401) clearSession();
+      setError(friendlyError(requestError));
+      throw requestError;
+    }
+  };
+
   if (!token) {
     return (
       <main className="page-shell" id="top">
@@ -292,7 +326,7 @@ export default function App() {
     <main className="page-shell" id="top">
       <SiteHeader user={user} onHome={() => setSelectedDocument(null)} onLogout={logout} />
       {selectedDocument ? (
-        <DocumentWorkspace document={selectedDocument} token={token} error={error} onBack={() => { setSelectedDocument(null); setError(''); }} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} onReview={updateDocumentReview} />
+        <DocumentWorkspace document={selectedDocument} token={token} error={error} onBack={() => { setSelectedDocument(null); setError(''); }} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} onReview={updateDocumentReview} onRefreshInsights={refreshDocumentInsights} />
       ) : (
         <DocumentLibrary token={token} folders={folders} documents={documents} totalDocuments={totalDocuments} selectedFolderId={selectedFolderId} selectedDocumentId={selectedDocument?.id} search={search} loading={libraryLoading} uploading={uploading} error={error} onSearch={setSearch} onSelectFolder={setSelectedFolderId} onUpload={handleUpload} onCreateFolder={createFolder} onDeleteFolder={deleteFolder} onMoveDocument={moveDocument} onOpen={openDocument} onOpenFile={openOriginalFile} onDelete={deleteDocument} onAnalyze={analyzeDocument} />
       )}

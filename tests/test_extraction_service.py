@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import backend.extraction as extraction_module
 from backend.config import Settings
 from backend.extraction import ExtractionService
@@ -75,3 +77,49 @@ def test_extraction_service_routes_to_huggingface_space(monkeypatch) -> None:
     assert kwargs["context_mode"] == "retrieved"
     assert kwargs["context_chars"] == 3000
     assert kwargs["reasoning"] is False
+
+
+def test_extraction_service_falls_back_when_space_times_out(monkeypatch) -> None:
+    service = ExtractionService(
+        Settings(_env_file=None, extraction_backend="huggingface-space")
+    )
+
+    class TimedOutBackend:
+        def extract_fields_from_text(self, *args, **kwargs):
+            raise TimeoutError("Space timed out")
+
+    service._hf_space_backend = TimedOutBackend()
+    calls = []
+
+    def fake_fallback(text, document_ir, **kwargs):
+        calls.append((text, document_ir, kwargs))
+        return {"contract_number": {"value": "42"}}, {
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "total_tokens": 20,
+        }
+
+    monkeypatch.setattr(extraction_module, "extract_fields_with_hf_chat", fake_fallback)
+    result, usage = service.extract(text="Договор № 42")
+
+    assert result["contract_number"]["value"] == "42"
+    assert usage["total_tokens"] == 20
+    assert calls[0][2]["model"] == service.settings.hf_extraction_fallback_model
+
+
+def test_extraction_service_can_disable_fallback(monkeypatch) -> None:
+    service = ExtractionService(
+        Settings(
+            _env_file=None,
+            extraction_backend="huggingface-space",
+            hf_extraction_fallback_enabled=False,
+        )
+    )
+
+    class TimedOutBackend:
+        def extract_fields_from_text(self, *args, **kwargs):
+            raise TimeoutError("Space timed out")
+
+    service._hf_space_backend = TimedOutBackend()
+    with pytest.raises(TimeoutError):
+        service.extract(text="Договор № 42")

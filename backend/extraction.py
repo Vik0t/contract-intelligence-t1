@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from backend.config import Settings
 from src.document_ir import DocumentIR
 from src.hf_space_extraction import HFSpaceNuExtractBackend
+from src.hf_chat_extraction import extract_fields_with_hf_chat
 from src.local_extraction import extract_contract_key_data, reset_extraction_stats
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractionService:
@@ -48,14 +52,40 @@ class ExtractionService:
             )
 
         if self.settings.extraction_backend == "huggingface-space":
-            result = self._get_hf_space_backend().extract_fields_from_text(
-                text,
-                document_ir,
-                prompt_mode=self.settings.hf_space_prompt_mode,
-                context_mode=self.settings.hf_space_context_mode,
-                context_chars=self.settings.hf_space_context_chars,
-                reasoning=self.settings.hf_space_reasoning,
-            )
+            try:
+                result = self._get_hf_space_backend().extract_fields_from_text(
+                    text,
+                    document_ir,
+                    prompt_mode=self.settings.hf_space_prompt_mode,
+                    context_mode=self.settings.hf_space_context_mode,
+                    context_chars=self.settings.hf_space_context_chars,
+                    reasoning=self.settings.hf_space_reasoning,
+                )
+            except Exception as space_error:
+                if not self.settings.hf_extraction_fallback_enabled:
+                    raise
+                logger.warning(
+                    "NuExtract Space failed (%s); trying Hugging Face chat extraction",
+                    type(space_error).__name__,
+                )
+                try:
+                    fallback_result, fallback_usage = extract_fields_with_hf_chat(
+                        text,
+                        document_ir,
+                        model=self.settings.hf_extraction_fallback_model,
+                        context_chars=self.settings.hf_space_context_chars,
+                    )
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        "NuExtract Space и резервное извлечение Hugging Face недоступны"
+                    ) from fallback_error
+                if not collect_stats:
+                    return fallback_result, {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    }
+                return fallback_result, fallback_usage
             if not collect_stats:
                 return result.result, {
                     "prompt_tokens": 0,
