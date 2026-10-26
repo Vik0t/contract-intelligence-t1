@@ -95,6 +95,17 @@ def test_service_root():
     assert response.json()["docs"] == "/docs"
 
 
+def test_swagger_uses_reverse_proxy_prefix(monkeypatch):
+    monkeypatch.setattr(app, "root_path", "/api")
+    monkeypatch.setattr(app, "servers", [])
+    monkeypatch.setattr(app, "openapi_schema", None)
+    response = client.get("/docs")
+    assert response.status_code == 200
+    assert "url: '/api/openapi.json'" in response.text
+    assert client.get("/").json()["docs"] == "/api/docs"
+    assert client.get("/openapi.json").json()["servers"] == [{"url": "/api"}]
+
+
 def test_favicon_probe_is_empty():
     response = client.get("/favicon.ico")
     assert response.status_code == 204

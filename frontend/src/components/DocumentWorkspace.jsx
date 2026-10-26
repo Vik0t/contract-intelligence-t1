@@ -53,7 +53,7 @@ function PartiesValue({ parties, onSelectSource }) {
   );
 }
 
-function FieldRow({ fieldKey, field, active, onSelectSource, onCopy }) {
+function FieldRow({ fieldKey, field, active, reviewed, onSelectSource, onCopy }) {
   const evidence = getFieldEvidence(fieldKey, field);
   const page = getFieldPage(fieldKey, field);
   const needsReview = fieldNeedsReview(fieldKey, field);
@@ -62,7 +62,7 @@ function FieldRow({ fieldKey, field, active, onSelectSource, onCopy }) {
     <section className={`field-row${active ? ' is-active' : ''}`}>
       <div className="field-row-heading">
         <span>{fieldLabels[fieldKey] ?? fieldKey.replaceAll('_', ' ')}</span>
-        {needsReview ? <strong className="review-flag">Стоит проверить</strong> : <strong className="verified-flag">Источник найден</strong>}
+        {needsReview && !reviewed ? <strong className="review-flag">Стоит проверить</strong> : <strong className="verified-flag">{needsReview ? 'Проверено оператором' : 'Источник найден'}</strong>}
       </div>
       <div className="field-row-value">
         {fieldKey === 'parties' ? <PartiesValue parties={value} onSelectSource={(source) => onSelectSource({ ...source, fieldKey })} /> : <span className={value === null || value === undefined || value === '' ? 'missing-value' : ''}>{formatFieldValue(fieldKey, field)}</span>}
@@ -130,6 +130,21 @@ function MetadataEditor({ fields, onChange }) {
                 </div>
               ))}
               <button className="text-button" type="button" onClick={addParty}>+ Добавить сторону</button>
+            </fieldset>
+          );
+        }
+        if (key === 'total_amount' && isStructuredField(field)) {
+          return (
+            <fieldset className="editor-fieldset" key={key}>
+              <legend>Общая сумма</legend>
+              <label className="editor-field">Сумма<input inputMode="decimal" value={field.value ?? ''} onChange={(event) => onChange(updateFieldValue(fields, key, event.target.value))} /></label>
+              <label className="editor-field">Валюта<input value={field.currency ?? ''} maxLength={3} placeholder="RUB" list="contract-currencies" onChange={(event) => {
+                const next = cloneFields(fields);
+                next.total_amount = { ...next.total_amount, currency: event.target.value.toUpperCase(), evidence: null, page_number: null };
+                onChange(next);
+              }} /></label>
+              <datalist id="contract-currencies"><option value="RUB">Рубли</option><option value="USD">Доллары США</option><option value="EUR">Евро</option><option value="CNY">Юани</option><option value="KZT">Тенге</option><option value="BYN">Белорусские рубли</option></datalist>
+              <span className="field-hint">Код из трёх букв: RUB — рубли, USD — доллары, EUR — евро.</span>
             </fieldset>
           );
         }
@@ -410,7 +425,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
   const [notice, setNotice] = useState('');
   const noticeTimeoutRef = useRef(null);
   const fields = document.metadata?.fields ?? {};
-  const reviewCount = useMemo(() => orderedEntries(fields).filter(([key, field]) => fieldNeedsReview(key, field)).length, [fields]);
+  const reviewCount = useMemo(() => document.review_status === 'reviewed' ? 0 : orderedEntries(fields).filter(([key, field]) => fieldNeedsReview(key, field)).length, [fields, document.review_status]);
   const riskCount = useMemo(() => Array.isArray(document.metadata?.risks) ? document.metadata.risks.length : deriveRisks(fields).length, [document.metadata?.risks, fields]);
 
   useEffect(() => {
@@ -568,7 +583,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
             </nav>
             <div className="review-content">
               {editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : null}
-              {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
+              {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} reviewed={document.review_status === 'reviewed'} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
               {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
               {!editing && activeTab === 'risks' ? <RisksPanel fields={fields} savedRisks={document.metadata?.risks} onSelectSource={setSelectedSource} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
             </div>

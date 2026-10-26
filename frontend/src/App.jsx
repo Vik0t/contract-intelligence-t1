@@ -34,14 +34,26 @@ export default function App() {
   const [error, setError] = useState('');
   const libraryRequestIdRef = useRef(0);
   const autoAnalyzeIdsRef = useRef(new Set());
+  const activeTokenRef = useRef(token);
 
   const clearSession = useCallback(() => {
+    if (activeTokenRef.current !== token) return;
+    activeTokenRef.current = null;
+    libraryRequestIdRef.current += 1;
+    autoAnalyzeIdsRef.current.clear();
     localStorage.removeItem('contract_token');
     localStorage.removeItem('contract_user');
     setToken(null);
     setUser(null);
     setSelectedDocument(null);
-  }, []);
+    setDocuments([]);
+    setFolders([]);
+    setTotalDocuments(0);
+    setSelectedFolderId(null);
+    setSearch('');
+    setDebouncedSearch('');
+    setUploading(false);
+  }, [token]);
 
   const logout = useCallback(async () => {
     try {
@@ -58,7 +70,7 @@ export default function App() {
   }, [search]);
 
   const loadLibrary = useCallback(async ({ showLoading = true } = {}) => {
-    if (!token) return;
+    if (!token || activeTokenRef.current !== token) return;
     const requestId = ++libraryRequestIdRef.current;
     if (showLoading) setLibraryLoading(true);
     try {
@@ -100,6 +112,7 @@ export default function App() {
     setError('');
     try {
       const fullDocument = await request(`/documents/${document.id}`, { headers: authHeaders(token) });
+      if (activeTokenRef.current !== token) return;
       setSelectedDocument(fullDocument);
       window.scrollTo({ top: 0, behavior: 'auto' });
     } catch (requestError) {
@@ -112,6 +125,7 @@ export default function App() {
     setError('');
     try {
       await request(`/documents/${document.id}/analyze`, { method: 'POST', headers: authHeaders(token) });
+      if (activeTokenRef.current !== token) return;
       await loadLibrary({ showLoading: false });
       if (selectedDocument?.id === document.id) await openDocument(document);
     } catch (requestError) {
@@ -178,6 +192,7 @@ export default function App() {
       const session = await request('/auth/login', { method: 'POST', body: JSON.stringify({ username: authForm.username, password: authForm.password }) });
       localStorage.setItem('contract_token', session.session_token);
       localStorage.setItem('contract_user', JSON.stringify(session.user));
+      activeTokenRef.current = session.session_token;
       setToken(session.session_token);
       setUser(session.user);
       setAuthForm({ username: '', email: '', password: '' });
@@ -220,6 +235,7 @@ export default function App() {
       formData.append('file', file);
       if (selectedFolderId !== null) formData.append('folder_id', String(selectedFolderId));
       const upload = await request('/documents', { method: 'POST', headers: authHeaders(token), body: formData });
+      if (activeTokenRef.current !== token) return;
       autoAnalyzeIdsRef.current.add(upload.document_id);
       await loadLibrary({ showLoading: false });
       await openDocument({ id: upload.document_id });
@@ -227,7 +243,7 @@ export default function App() {
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
     } finally {
-      setUploading(false);
+      if (activeTokenRef.current === token) setUploading(false);
     }
   };
 
@@ -276,7 +292,8 @@ export default function App() {
   const saveDocumentMetadata = async (document, fields) => {
     try {
       const updated = await request(`/documents/${document.id}/metadata`, { method: 'PATCH', headers: authHeaders(token), body: JSON.stringify({ fields: fieldsForSave(fields) }) });
-      setSelectedDocument(updated);
+      if (activeTokenRef.current !== token) return;
+      setSelectedDocument((current) => current?.id === document.id ? updated : current);
       await loadLibrary({ showLoading: false });
     } catch (requestError) {
       if (requestError.status === 401) clearSession();
@@ -292,7 +309,8 @@ export default function App() {
         headers: authHeaders(token),
         body: JSON.stringify({ confirmed }),
       });
-      setSelectedDocument(updated);
+      if (activeTokenRef.current !== token) return;
+      setSelectedDocument((current) => current?.id === document.id ? updated : current);
       await loadLibrary({ showLoading: false });
     } catch (requestError) {
       if (requestError.status === 401) clearSession();
@@ -302,12 +320,15 @@ export default function App() {
   };
 
   const refreshDocumentInsights = async (document) => {
+    setError('');
     try {
       const result = await request(`/documents/${document.id}/insights`, { method: 'POST', headers: authHeaders(token) });
+      if (activeTokenRef.current !== token) return result;
       const updated = await request(`/documents/${document.id}`, { headers: authHeaders(token) });
-      setSelectedDocument(updated);
+      setSelectedDocument((current) => current?.id === document.id ? updated : current);
       return result;
     } catch (requestError) {
+      if (activeTokenRef.current !== token) throw requestError;
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
       throw requestError;

@@ -16,7 +16,7 @@ from PIL import Image, ImageOps
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, File, Form, HTTPException, Header, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Header, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from starlette.concurrency import run_in_threadpool
@@ -53,6 +53,7 @@ app = FastAPI(
     title="T1 Contract Intelligence",
     description="Extracting important info from contracts",
     version="1.1.0",
+    root_path=os.getenv("API_ROOT_PATH", ""),
     lifespan=lifespan,
 )
 
@@ -89,13 +90,13 @@ async def readiness():
 
 
 @app.get("/", include_in_schema=False)
-async def service_root():
+async def service_root(request: Request):
     """Small API landing response for direct browser visits."""
     return {
         "service": "T1 Contract Intelligence API",
         "status": "ok",
-        "docs": "/docs",
-        "health": "/ping",
+        "docs": f"{request.scope.get('root_path', '')}/docs",
+        "health": f"{request.scope.get('root_path', '')}/ping",
     }
 
 

@@ -64,7 +64,12 @@ export function fieldsForSave(fields) {
     }
     return Number(normalized);
   };
-  if (isStructuredField(result.total_amount)) result.total_amount.value = number(result.total_amount.value, 'Сумма');
+  if (isStructuredField(result.total_amount)) {
+    result.total_amount.value = number(result.total_amount.value, 'Сумма');
+    const currency = (result.total_amount.currency ?? '').trim().toUpperCase();
+    if (currency && !/^[A-Z]{3}$/.test(currency)) throw new Error('Укажите код валюты из трёх букв, например RUB.');
+    result.total_amount.currency = currency || null;
+  }
   if (isStructuredField(result.vat)) {
     result.vat.rate = number(result.vat.rate, 'Ставка НДС');
     if (result.vat.rate !== null && (result.vat.rate < 0 || result.vat.rate > 100)) throw new Error('Ставка НДС должна быть от 0 до 100%.');
@@ -140,6 +145,7 @@ export function fieldNeedsReview(key, field) {
   }
   if (value === null || value === undefined || value === '') return true;
   if (!getFieldEvidence(key, field)) return true;
+  if (key === 'total_amount' && isStructuredField(field) && !field.currency) return true;
   if (key === 'vat' && isStructuredField(field)) {
     return field.mode === 'not_stated' || /при наличии|если применим/i.test(field.raw_value ?? '');
   }
@@ -165,6 +171,7 @@ export function fieldsToPlainObject(fields) {
   const result = {};
   for (const key of FIELD_ORDER) {
     if (Object.hasOwn(fields ?? {}, key)) result[fieldLabels[key] ?? key] = getFieldValue(key, fields[key]);
+    if (key === 'total_amount' && isStructuredField(fields?.[key])) result['Валюта'] = fields[key].currency ?? null;
   }
   return result;
 }

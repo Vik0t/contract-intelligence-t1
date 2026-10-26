@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fieldsForSave, getFieldValue, updateFieldValue } from './contractFields.js';
+import { fieldsForSave, fieldsToPlainObject, getFieldValue, updateFieldValue } from './contractFields.js';
 
 test('operator amount with Russian decimal separator is exported as a number', () => {
   const original = { total_amount: { value: '100 000,50', currency: 'RUB' } };
@@ -32,4 +32,15 @@ test('edited values no longer claim that an old citation confirms them', () => {
 test('VAT edits are readable even without original source wording', () => {
   assert.equal(getFieldValue('vat', { mode: 'not_subject', rate: null }), 'Не облагается НДС');
   assert.equal(getFieldValue('vat', { mode: 'excluded', rate: 20 }), 'НДС сверх суммы 20%');
+});
+
+test('copy and JSON export preserve the currency of a contract amount', () => {
+  const result = fieldsToPlainObject({ total_amount: { value: 100000, currency: 'USD' } });
+  assert.equal(result['Общая сумма'], 100000);
+  assert.equal(result['Валюта'], 'USD');
+});
+
+test('currency edits normalize codes and reject unreadable symbols', () => {
+  assert.equal(fieldsForSave({ total_amount: { value: 100, currency: ' usd ' } }).total_amount.currency, 'USD');
+  assert.throws(() => fieldsForSave({ total_amount: { value: 100, currency: '$' } }), /код валюты/);
 });

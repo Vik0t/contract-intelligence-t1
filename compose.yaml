@@ -23,6 +23,7 @@ services:
     environment:
       DATABASE_URL: postgresql://contracts:${POSTGRES_PASSWORD}@db:5432/contracts
       DOCUMENT_STORAGE_DIR: /data/uploads
+      API_ROOT_PATH: /api
       HF_HOME: /models
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
