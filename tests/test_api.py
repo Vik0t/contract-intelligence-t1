@@ -99,6 +99,13 @@ def test_favicon_probe_is_empty():
     response = client.get("/favicon.ico")
     assert response.status_code == 204
 
+
+def test_server_timestamps_include_timezone_for_remote_browsers():
+    from backend.api_requests import UserResponse
+    user = UserResponse(id=1, username="operator", email="operator@example.com", role="user", created_at=datetime(2026, 10, 26, 17, 0))
+    assert user.created_at.tzinfo is not None
+    assert datetime.fromisoformat(user.model_dump(mode="json")["created_at"]).utcoffset() is not None
+
 # ============ AUTHENTICATION TESTS ============
 
 class TestAuthentication:
@@ -938,6 +945,35 @@ class TestMetadataEndpoints:
         assert edited.json()["metadata"]["summary"] is None
         assert edited.json()["metadata"]["risks"] is None
     
+    def test_background_analysis_cannot_overwrite_operator_edit(self, monkeypatch):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename="concurrent.pdf")
+            database.create_parsed_document(db, document.id, "PAGE 1\nДоговор №12")
+            database.create_metadata(db, document.id, {"contract_number": {"value": "12"}})
+            document_id = document.id
+        finally:
+            db.close()
+
+        def edit_while_generating(*_args):
+            editing = database.get_session(app_module.engine)
+            try:
+                database.update_metadata(editing, document_id, {"contract_number": {"value": "13"}})
+            finally:
+                editing.close()
+            return "Сводка по старым данным"
+
+        monkeypatch.setattr(app_module, "summarize_document", edit_while_generating)
+        monkeypatch.setattr(app_module, "analyze_risks", lambda *_args: [])
+        response = client.post(f"/documents/{document_id}/insights", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["metadata"]["fields"]["contract_number"]["value"] == "13"
+        assert response.json()["metadata"]["summary"] is None
+        assert response.json()["metadata"]["risks"] is None
+        assert response.json()["errors"]
+
     def test_extract_metadata_success(self):
         """Test extracting metadata from a parsed document"""
         headers = get_auth_header()

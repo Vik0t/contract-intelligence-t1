@@ -9,6 +9,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
+MODEL_FILES = ["*.json", "*.safetensors", "*.bin", "*.model", "*.tiktoken", "*.txt", "*.jinja", "*.py", "LICENSE*", "README.md"]
+
 
 def model_specs() -> list[tuple[str, str | None]]:
     return [
@@ -55,7 +57,7 @@ def check_runtime(*, require_gpu: bool = True, require_models: bool = True) -> d
     models = []
     if require_models:
         for model, revision in model_specs():
-            folder = Path(snapshot_download(model, revision=revision, local_files_only=True))
+            folder = Path(snapshot_download(model, revision=revision, local_files_only=True, allow_patterns=MODEL_FILES))
             verify_weights(folder)
             models.append({"model": model, "revision": folder.name})
     return {"torch": torch.__version__, "cuda": torch.version.cuda, "gpu": gpu, "models": models, "ocr": "rus+eng", "docx": "LibreOffice"}

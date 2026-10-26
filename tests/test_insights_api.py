@@ -34,6 +34,9 @@ def test_deepcode_provider_uses_configured_openai_compatible_endpoint(monkeypatc
         def __exit__(self, *_args):
             pass
 
+        def close(self):
+            pass
+
         def post(self, url, **kwargs):
             called["url"] = url
             called["headers"] = kwargs["headers"]

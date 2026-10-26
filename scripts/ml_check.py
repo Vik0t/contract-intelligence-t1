@@ -65,7 +65,8 @@ def score(fields: dict) -> dict[str, bool]:
         if "_name" in key:
             result[key] = any(expected.casefold() in str(party.get("name") or "").casefold() for party in parties)
         elif "_inn" in key:
-            result[key] = any(party.get("inn") == expected for party in parties)
+            expected_name = EXPECTED[key.replace("_inn", "_name")].casefold()
+            result[key] = any(party.get("inn") == expected and expected_name in str(party.get("name") or "").casefold() for party in parties)
         elif key == "vat":
             vat = fields.get(key) or {}
             result[key] = (vat.get("rate"), vat.get("mode")) == expected

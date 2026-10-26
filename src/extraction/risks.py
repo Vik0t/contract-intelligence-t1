@@ -20,6 +20,7 @@ RISK_PROMPT = """Ты помогаешь оператору предварите
 Отбирай только риски, прямо следующие из конкретного условия: например, явно неограниченная санкция или одностороннее изменение обязательства.
 Обычная отсылка к применимому законодательству и изменение договора по соглашению сторон сами по себе не доказывают риск. Не выводи из такой отсылки неограниченную ответственность или упущенную выгоду.
 Не считай отсутствие в данном фрагменте гарантии, залога или лимита ответственности доказательством их отсутствия в договоре. Не добавляй к условиям неуказанные суммы, полную оплату, проценты и основания ответственности.
+Обычные обязательства исполнить предмет договора или устранить недостатки за свой счёт сами по себе не доказывают риск. Данные о сторонах служат только для контекста: подтверждай риск цитатой исключительно из текущего текста договора.
 Не сравнивай условия с «рыночными ставками» без исходных данных. В body объясни последствие написанного условия, без новых фактов и предположений.
 Верни только JSON-массив объектов с ключами title, body, evidence, page. title и body — кратко на русском. evidence — дословная короткая цитата из текста, подтверждающая риск. page — номер страницы из метки PAGE N, если он указан; иначе null. Если обоснованных рисков нет, верни [].
 
@@ -35,17 +36,32 @@ def analyze_risks(document_text: str, extracted_fields: dict[str, Any]) -> list[
     local = os.getenv("RISK_BACKEND", summary_backend()).strip().lower() == "local"
     combined = []
     seen = set()
+    # Evidence from global extraction can belong to another chunk. Including it
+    # here lets the model cite a clause absent from the page it is reviewing.
+    parties = extracted_fields.get("parties") or []
+    if isinstance(parties, dict):
+        parties = parties.get("value") or []
+    context = {"parties": [{"name": party.get("name"), "role": party.get("role")} for party in parties if isinstance(party, dict)]}
     for chunk in document_chunks(document_text, int(os.getenv("RISK_MAX_INPUT_CHARS", "12000"))):
-        prompt = RISK_PROMPT.format(fields=_format_fields_block(extracted_fields), text=chunk)
-        items = generate_with_fallback(
-            prompt,
-            model=os.getenv("RISK_MODEL_NAME") or os.getenv("SUMMARY_MODEL_NAME", DEFAULT_HF_FALLBACK_MODEL),
-            max_tokens=int(os.getenv("RISK_MAX_NEW_TOKENS", "1800")),
-            temperature=0.0,
-            provider="local" if local else os.getenv("RISK_PROVIDER") or os.getenv("SUMMARY_PROVIDER", "hf"),
-            fallback_model=os.getenv("RISK_FALLBACK_MODEL_NAME", DEFAULT_HF_FALLBACK_MODEL),
-            parse=lambda raw, source=chunk: parse_risks(raw, source),
-        )
+        prompt = RISK_PROMPT.format(fields=_format_fields_block(context), text=chunk)
+        for attempt in range(2):
+            try:
+                items = generate_with_fallback(
+                    prompt,
+                    model=os.getenv("RISK_MODEL_NAME") or os.getenv("SUMMARY_MODEL_NAME", DEFAULT_HF_FALLBACK_MODEL),
+                    max_tokens=int(os.getenv("RISK_MAX_NEW_TOKENS", "1800")),
+                    temperature=0.0,
+                    provider="local" if local else os.getenv("RISK_PROVIDER") or os.getenv("SUMMARY_PROVIDER", "hf"),
+                    fallback_model=os.getenv("RISK_FALLBACK_MODEL_NAME", DEFAULT_HF_FALLBACK_MODEL),
+                    parse=lambda raw, source=chunk: parse_risks(raw, source),
+                )
+                break
+            except ValueError:
+                if attempt:
+                    raise
+                # Keep invalid citations out of the result; ask the same backend
+                # once to select a contiguous original passage instead.
+                prompt += "\nПредыдущий ответ не прошёл проверку формата или цитат. Верни JSON-массив. Копируй evidence из текста дословно, одним непрерывным фрагментом: без многоточий, исправлений и пересказа. Если риск нельзя подтвердить цитатой, не включай его."
         for item in items:
             key = " ".join(item["evidence"].casefold().split())
             if key not in seen:

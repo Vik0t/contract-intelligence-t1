@@ -4,10 +4,47 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import contextmanager
+import threading
 
 import httpx
 
 _aliases: dict[tuple[str, str], str] = {}
+_clients: dict[tuple, httpx.Client] = {}
+_client_lock = threading.Lock()
+
+
+@contextmanager
+def api_client():
+    """Use explicit proxy opt-in and retry only connection establishment failures.
+
+    Developer machines can inherit proxies that cannot reach an internal API.
+    Certificate verification stays enabled; completed requests are not replayed.
+    """
+    trust_env = os.getenv("ML_API_TRUST_ENV", "false").lower() in {"true", "1", "yes"}
+    retries = int(os.getenv("ML_API_CONNECT_RETRIES", "2"))
+    if not 0 <= retries <= 3:
+        raise ValueError("ML_API_CONNECT_RETRIES must be between 0 and 3")
+    timeout = float(os.getenv("ML_API_TIMEOUT", "120"))
+    config = (trust_env, retries, timeout)
+    with _client_lock:
+        if config not in _clients:
+            _clients[config] = httpx.Client(
+                timeout=httpx.Timeout(timeout, connect=10.0), trust_env=trust_env,
+                transport=httpx.HTTPTransport(retries=retries, trust_env=trust_env,
+                    limits=httpx.Limits(max_connections=8, max_keepalive_connections=4, keepalive_expiry=60)),
+            )
+        client = _clients[config]
+    # Reuse TLS connections across extraction, summary and risks. httpx.Client
+    # is thread-safe; credentials are supplied per request, never on the pool.
+    yield client
+
+
+def close_api_clients() -> None:
+    with _client_lock:
+        for client in _clients.values():
+            client.close()
+        _clients.clear()
 
 
 def resolve_model(client: httpx.Client, base: str, key: str, requested: str, *, required: bool = False) -> str:
@@ -45,7 +82,7 @@ def preflight_model(requested: str) -> str:
     key = os.getenv("OPENAI_API_KEY", "")
     if not base or not key:
         raise ValueError("Нужны OPENAI_BASE_URL и OPENAI_API_KEY")
-    with httpx.Client() as client:
+    with api_client() as client:
         return resolve_model(client, base, key, requested, required=True)
 
 

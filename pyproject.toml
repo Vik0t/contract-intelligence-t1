@@ -1,7 +1,7 @@
 [project]
 name = "contract-intelligence-t1"
 version = "0.1.0"
-description = "Add your description here"
+description = "Contract extraction, evidence review, summaries and risk analysis"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
@@ -104,3 +104,6 @@ torchvision = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32'" }]
 dev = [
     "pytest==9.1.1",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

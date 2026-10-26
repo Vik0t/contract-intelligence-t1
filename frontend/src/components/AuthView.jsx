@@ -6,7 +6,7 @@ export default function AuthView({ authMode, authForm, loading, error, onChange,
         <p className="eyebrow">Т1 / Договоры</p>
         <h1>Договор под контролем</h1>
         <p className="auth-lead">
-          Загрузите PDF или DOCX, получите ключевые условия и проверьте каждое значение по тексту документа.
+          Загрузите PDF, DOCX или фотографию, получите ключевые условия и проверьте каждое значение по тексту документа.
         </p>
         <ol className="auth-steps">
           <li><span>01</span> Загружаете договор</li>

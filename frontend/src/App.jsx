@@ -4,6 +4,7 @@ import AuthView from './components/AuthView.jsx';
 import DocumentLibrary from './components/DocumentLibrary.jsx';
 import DocumentWorkspace from './components/DocumentWorkspace.jsx';
 import SiteHeader from './components/SiteHeader.jsx';
+import { fieldsForSave } from './contractFields.js';
 import './App.css';
 
 function getSavedUser() {
@@ -274,7 +275,7 @@ export default function App() {
 
   const saveDocumentMetadata = async (document, fields) => {
     try {
-      const updated = await request(`/documents/${document.id}/metadata`, { method: 'PATCH', headers: authHeaders(token), body: JSON.stringify({ fields }) });
+      const updated = await request(`/documents/${document.id}/metadata`, { method: 'PATCH', headers: authHeaders(token), body: JSON.stringify({ fields: fieldsForSave(fields) }) });
       setSelectedDocument(updated);
       await loadLibrary({ showLoading: false });
     } catch (requestError) {

@@ -170,7 +170,7 @@ def create_tables(engine):
         if 'review_status' not in columns:
             connection.execute(text("ALTER TABLE documents ADD COLUMN review_status VARCHAR(20) NOT NULL DEFAULT 'pending'"))
         if 'reviewed_at' not in columns:
-            connection.execute(text('ALTER TABLE documents ADD COLUMN reviewed_at DATETIME'))
+            connection.execute(text('ALTER TABLE documents ADD COLUMN reviewed_at TIMESTAMP'))
         if 'reviewed_by' not in columns:
             connection.execute(text('ALTER TABLE documents ADD COLUMN reviewed_by INTEGER'))
 
@@ -486,6 +486,24 @@ def update_metadata(session, document_id, fields, summary=None, risks=None):
         session.commit()
     else:
         metadata = create_metadata(session, document_id, fields, summary=summary, risks=risks)
+    return metadata
+
+
+class MetadataChangedError(RuntimeError):
+    pass
+
+
+def save_insights(session, document_id, expected_fields, *, summary=None, risks=None):
+    """Never overwrite operator edits with conclusions generated for older fields."""
+    metadata = session.query(DocumentMetadata).filter_by(document_id=document_id).populate_existing().with_for_update().first()
+    if metadata is None or metadata.fields != expected_fields:
+        session.rollback()
+        raise MetadataChangedError("Fields changed while analysis was running")
+    if summary is not None:
+        metadata.summary = summary
+    if risks is not None:
+        metadata.risks = risks
+    session.commit()
     return metadata
 
 def delete_metadata(session, document_id):

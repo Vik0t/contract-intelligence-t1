@@ -84,6 +84,13 @@ function MetadataEditor({ fields, onChange }) {
     const structured = isStructuredField(next.parties);
     const parties = structured ? [...(next.parties.value ?? [])] : [...(next.parties ?? [])];
     parties[index] = { ...(parties[index] ?? {}), [name]: value };
+    if (name === 'inn') {
+      parties[index].inn_evidence = null;
+      parties[index].inn_page_number = null;
+    } else {
+      parties[index].name_evidence = null;
+      parties[index].name_page_number = null;
+    }
     if (structured) next.parties.value = parties;
     else next.parties = parties;
     onChange(next);
@@ -123,6 +130,28 @@ function MetadataEditor({ fields, onChange }) {
                 </div>
               ))}
               <button className="text-button" type="button" onClick={addParty}>+ Добавить сторону</button>
+            </fieldset>
+          );
+        }
+        if (key === 'vat' && isStructuredField(field)) {
+          const updateVat = (name, value) => {
+            const next = cloneFields(fields);
+            next.vat = { ...next.vat, [name]: value, evidence: null, page_number: null, raw_value: null };
+            if (name === 'mode' && value === 'not_subject') next.vat.rate = null;
+            onChange(next);
+          };
+          return (
+            <fieldset className="editor-fieldset" key={key}>
+              <legend>НДС</legend>
+              <label className="editor-field">Условие
+                <select value={field.mode ?? 'not_stated'} onChange={(event) => updateVat('mode', event.target.value)}>
+                  <option value="included">Включён в сумму</option>
+                  <option value="excluded">Начисляется сверх суммы</option>
+                  <option value="not_subject">Не облагается</option>
+                  <option value="not_stated">Не указан</option>
+                </select>
+              </label>
+              <label className="editor-field">Ставка, %<input inputMode="decimal" value={field.rate ?? ''} disabled={field.mode === 'not_subject'} onChange={(event) => updateVat('rate', event.target.value)} /></label>
             </fieldset>
           );
         }
@@ -386,8 +415,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
 
   useEffect(() => {
     setEditing(false);
-    setDraftFields(cloneFields(document.metadata?.fields));
-  }, [document.id, document.metadata]);
+  }, [document.id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -493,7 +521,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
   return (
     <section className="workspace-shell">
       <header className="workspace-header">
-        <button className="back-button" type="button" onClick={onBack}><span aria-hidden="true">←</span> К списку договоров</button>
+        <button className="back-button" type="button" onClick={() => { if (!editing || window.confirm('Есть несохранённые изменения. Вернуться к списку без сохранения?')) onBack(); }}><span aria-hidden="true">←</span> К списку договоров</button>
         <div className="workspace-titlebar">
           <div className="workspace-title">
             <p className="eyebrow">Проверка договора</p>
@@ -504,7 +532,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
             {hasMetadata && !editing ? <button className="secondary-button" type="button" onClick={copyAll}>Копировать всё</button> : null}
             {hasMetadata && !editing ? <button className="secondary-button" type="button" onClick={exportJson}>Скачать JSON</button> : null}
             {document.has_file ? <button className="secondary-button" type="button" onClick={() => onOpenFile(document)}>Открыть оригинал</button> : null}
-            {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" onClick={() => { setActiveTab('fields'); setEditing(true); }}>Редактировать</button> : null}
+            {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" onClick={() => { setDraftFields(cloneFields(fields)); setActiveTab('fields'); setEditing(true); }}>Редактировать</button> : null}
             {hasMetadata && !editing && document.review_status !== 'reviewed' ? <button className="primary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить проверку'}</button> : null}
             {hasMetadata && !editing && document.review_status === 'reviewed' ? <button className="secondary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(false)}>Вернуть на проверку</button> : null}
             {editing ? <button className="secondary-button" type="button" onClick={() => { setEditing(false); setDraftFields(cloneFields(fields)); }}>Отменить</button> : null}
@@ -534,9 +562,9 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
         <div className="workspace-grid">
           <aside className="review-panel">
             <nav className="workspace-tabs" aria-label="Разделы анализа">
-              <button type="button" className={activeTab === 'fields' ? 'is-active' : ''} onClick={() => setActiveTab('fields')}>Поля{reviewCount ? <span>{reviewCount} проверить</span> : null}</button>
-              <button type="button" className={activeTab === 'summary' ? 'is-active' : ''} onClick={() => setActiveTab('summary')}>Кратко</button>
-              <button type="button" className={activeTab === 'risks' ? 'is-active' : ''} onClick={() => setActiveTab('risks')}>Риски{riskCount ? <span>{riskCount}</span> : null}</button>
+              <button type="button" aria-pressed={activeTab === 'fields'} className={activeTab === 'fields' ? 'is-active' : ''} onClick={() => setActiveTab('fields')}>Поля{reviewCount ? <span>{reviewCount} проверить</span> : null}</button>
+              <button type="button" aria-pressed={activeTab === 'summary'} className={activeTab === 'summary' ? 'is-active' : ''} onClick={() => setActiveTab('summary')}>Кратко</button>
+              <button type="button" aria-pressed={activeTab === 'risks'} className={activeTab === 'risks' ? 'is-active' : ''} onClick={() => setActiveTab('risks')}>Риски{riskCount ? <span>{riskCount}</span> : null}</button>
             </nav>
             <div className="review-content">
               {editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : null}

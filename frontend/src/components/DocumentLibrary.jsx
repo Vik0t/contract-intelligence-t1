@@ -111,8 +111,8 @@ export default function DocumentLibrary({
             {uploading ? 'Загружаем…' : '+ Загрузить договор'}
           </button>
         </div>
-        <input ref={inputRef} className="visually-hidden" type="file" accept=".pdf,.docx,.jpg,.jpeg,.png,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
-        <input ref={cameraInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
+        <input ref={inputRef} className="visually-hidden" tabIndex={-1} aria-hidden="true" type="file" accept=".pdf,.docx,.jpg,.jpeg,.png,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
+        <input ref={cameraInputRef} className="visually-hidden" tabIndex={-1} aria-hidden="true" type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
       </header>
 
       <div

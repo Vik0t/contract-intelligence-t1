@@ -65,6 +65,12 @@ def test_chunk_merge_preserves_zero_amount_and_fills_later_party_inn():
     assert result["parties"][0]["inn"] == "123"
 
 
+def test_chunk_merge_preserves_main_contract_vat_without_raw_value():
+    first = validate_model_result({"vat": {"rate": 0, "mode": "not_subject", "evidence": "НДС не облагается"}}, "PAGE 1\nНДС не облагается")
+    appendix = validate_model_result({"vat": {"rate": 20, "mode": "included", "evidence": "включая НДС 20%"}}, "PAGE 8\nвключая НДС 20%")
+    assert merge_extractions([first, appendix])["vat"] == first["vat"]
+
+
 def test_local_summary_and_risks_never_call_cloud(monkeypatch):
     monkeypatch.setenv("SUMMARY_BACKEND", "local")
     monkeypatch.setenv("RISK_BACKEND", "local")

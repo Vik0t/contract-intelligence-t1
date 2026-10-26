@@ -1,9 +1,13 @@
 from re import fullmatch, match
 from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
-from typing import Optional, Dict, Any, List
+from pydantic import AfterValidator, BaseModel, EmailStr, Field, field_validator, model_validator
+from typing import Annotated, Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
+
+# Existing database timestamps are server-local and naive. Include their actual
+# timezone in responses so a browser in another zone can display the right day.
+ResponseDateTime = Annotated[datetime, AfterValidator(lambda value: value.astimezone())]
 
 # ============ ENUMS ============
 
@@ -97,7 +101,7 @@ class UserLoginResponse(BaseModel):
         ...,
         description="Session token for authentication"
     )
-    expires_at: datetime = Field(
+    expires_at: ResponseDateTime = Field(
         ...,
         description="Token expiration timestamp"
     )
@@ -161,7 +165,7 @@ class SessionValidateResponse(BaseModel):
         None,
         description="User ID if session is valid"
     )
-    expires_at: Optional[datetime] = Field(
+    expires_at: Optional[ResponseDateTime] = Field(
         None,
         description="Session expiration time if valid"
     )
@@ -210,7 +214,7 @@ class UserResponse(BaseModel):
         ...,
         description="User's role (user/admin)"
     )
-    created_at: datetime = Field(
+    created_at: ResponseDateTime = Field(
         ...,
         description="Account creation timestamp"
     )
@@ -357,11 +361,11 @@ class DocumentResponse(BaseModel):
         "pending",
         description="Operator review status"
     )
-    reviewed_at: Optional[datetime] = Field(
+    reviewed_at: Optional[ResponseDateTime] = Field(
         None,
         description="When the operator confirmed the result"
     )
-    created_at: datetime = Field(
+    created_at: ResponseDateTime = Field(
         ...,
         description="Document creation timestamp"
     )
@@ -473,7 +477,7 @@ class MetadataResponse(BaseModel):
         description="AI-generated plain-language summary of the contract"
     )
     risks: Optional[List[Dict[str, Any]]] = None
-    created_at: datetime = Field(
+    created_at: ResponseDateTime = Field(
         ...,
         description="Metadata creation timestamp"
     )
@@ -496,11 +500,11 @@ class SessionResponse(BaseModel):
         ...,
         description="Session token"
     )
-    created_at: datetime = Field(
+    created_at: ResponseDateTime = Field(
         ...,
         description="Session creation timestamp"
     )
-    expires_at: datetime = Field(
+    expires_at: ResponseDateTime = Field(
         ...,
         description="Session expiration timestamp"
     )
@@ -553,7 +557,7 @@ class TemplateResponse(BaseModel):
         ...,
         description="Template field schema"
     )
-    created_at: datetime = Field(
+    created_at: ResponseDateTime = Field(
         ...,
         description="Template creation timestamp"
     )
@@ -640,7 +644,7 @@ class FolderResponse(BaseModel):
     owner: int
     name: str
     document_count: int = 0
-    created_at: datetime
+    created_at: ResponseDateTime
 
 class FolderListResponse(BaseModel):
     """List of folders for the current user."""

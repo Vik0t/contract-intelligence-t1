@@ -82,7 +82,7 @@ def test_deepcode_uses_resolved_model_and_disables_qwen_thinking(monkeypatch):
         return httpx.Response(200, json={"choices": [{"message": {"content": "Готово"}}]})
 
     client_class = httpx.Client
-    monkeypatch.setattr(summary.httpx, "Client", lambda **kwargs: client_class(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(summary, "api_client", lambda: client_class(transport=httpx.MockTransport(handler)))
     assert summary.generate_chat("Текст", model="Qwen3.8-Flash-Next", max_tokens=100, provider="deepcode") == "Готово"
     assert posted[0]["model"] == "qwen3.8-flash-next"
     assert posted[0]["chat_template_kwargs"] == {"enable_thinking": False}

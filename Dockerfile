@@ -1,5 +1,7 @@
 # CUDA 12.8 supports both Hopper (H100) and Blackwell (RTX 5090).
-ARG RUNTIME_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+# The official cu128 Torch wheel supplies cuDNN/cuBLAS and CUDA libraries.
+# Keep the base image minimal instead of shipping a second copy of those libs.
+ARG RUNTIME_IMAGE=nvidia/cuda:12.8.1-base-ubuntu24.04
 FROM ${RUNTIME_IMAGE} AS backend
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \

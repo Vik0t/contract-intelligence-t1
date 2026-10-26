@@ -9,8 +9,10 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import unicodedata
 
 import pymupdf
+from PIL import Image, ImageOps
 
 
 _conversion_lock = threading.Lock()
@@ -35,7 +37,9 @@ def view_pdf_path(source: str | Path) -> Path:
     with _conversion_lock:
         if rendered.exists() and rendered.stat().st_mtime_ns >= path.stat().st_mtime_ns:
             return rendered
-        with tempfile.TemporaryDirectory(prefix="contract-view-") as directory:
+        # The converted PDF and its destination must share a filesystem:
+        # /tmp and the persistent Docker documents volume can be different mounts.
+        with tempfile.TemporaryDirectory(prefix=".contract-view-", dir=path.parent) as directory:
             profile = Path(directory) / "profile"
             command = [
                 converter,
@@ -55,6 +59,16 @@ def view_pdf_path(source: str | Path) -> Path:
 
 
 def render_page(source: str | Path, number: int) -> bytes:
+    if Path(source).suffix.lower() in {".png", ".jpg", ".jpeg"}:
+        if number != 1:
+            raise IndexError("Страница не найдена")
+        import io
+        with Image.open(source) as original:
+            image = ImageOps.exif_transpose(original).convert("RGB")
+            image.thumbnail((1400, 1400 * 20))
+            output = io.BytesIO()
+            image.save(output, format="PNG")
+            return output.getvalue()
     with pymupdf.open(view_pdf_path(source)) as pdf:
         if number < 1 or number > len(pdf):
             raise IndexError("Страница не найдена")
@@ -64,6 +78,8 @@ def render_page(source: str | Path, number: int) -> bytes:
 
 
 def page_count(source: str | Path) -> int:
+    if Path(source).suffix.lower() in {".png", ".jpg", ".jpeg"}:
+        return 1
     with pymupdf.open(view_pdf_path(source)) as pdf:
         return len(pdf)
 
@@ -79,29 +95,69 @@ def _search_terms(evidence: str) -> list[str]:
     return list(dict.fromkeys(term for term in candidates if len(term) >= 4))
 
 
-def locate_evidence(source: str | Path, evidence: str, preferred_page: int | None = None) -> dict | None:
+def _normalize(value: str) -> str:
+    value = unicodedata.normalize("NFKC", value).casefold()
+    for character in ("\xad", "\u2010", "\u2011"):
+        value = value.replace(character, "-")
+    return " ".join(value.split())
+
+
+def _matching_rects(parts, evidence: str):
+    """Map an exact normalized text span back to its original word/block boxes."""
+    text = ""
+    spans = []
+    for content, rectangle, line in parts:
+        content = _normalize(content)
+        start = len(text)
+        text += content + " "
+        spans.append((start, len(text) - 1, rectangle, line))
+    start = text.find(_normalize(evidence))
+    if start < 0:
+        return []
+    end = start + len(_normalize(evidence))
+    lines = {}
+    for left, right, rectangle, line in spans:
+        if right > start and left < end:
+            if line in lines:
+                lines[line] |= rectangle
+            else:
+                lines[line] = pymupdf.Rect(rectangle)
+    return list(lines.values())
+
+
+def _location(number, rectangles, width, height):
+    return {"page": number, "rects": [{"x": rect.x0 / width, "y": rect.y0 / height,
+            "width": rect.width / width, "height": rect.height / height} for rect in rectangles[:12]]}
+
+
+def locate_evidence(source: str | Path, evidence: str, preferred_page: int | None = None, *, document_ir: dict | None = None) -> dict | None:
     if not evidence or not evidence.strip():
         return None
-    with pymupdf.open(view_pdf_path(source)) as pdf:
-        indices = list(range(len(pdf)))
-        if preferred_page and 1 <= preferred_page <= len(pdf):
-            indices.remove(preferred_page - 1)
-            indices.insert(0, preferred_page - 1)
-        for term in _search_terms(evidence):
-            for index in indices:
-                page = pdf[index]
-                rectangles = page.search_for(term)
-                if rectangles:
-                    return {
-                        "page": index + 1,
-                        "rects": [
-                            {
-                                "x": rect.x0 / page.rect.width,
-                                "y": rect.y0 / page.rect.height,
-                                "width": rect.width / page.rect.width,
-                                "height": rect.height / page.rect.height,
-                            }
-                            for rect in rectangles[:12]
-                        ],
-                    }
+    image = Path(source).suffix.lower() in {".png", ".jpg", ".jpeg"}
+    if not image:
+        with pymupdf.open(view_pdf_path(source)) as pdf:
+            indices = list(range(len(pdf)))
+            if preferred_page and 1 <= preferred_page <= len(pdf):
+                indices.remove(preferred_page - 1)
+                indices.insert(0, preferred_page - 1)
+            for term in _search_terms(evidence):
+                for index in indices:
+                    page = pdf[index]
+                    rectangles = page.search_for(term)
+                    if not rectangles:
+                        parts = [(word[4], pymupdf.Rect(word[:4]), (word[5], word[6])) for word in page.get_text("words", sort=True)]
+                        rectangles = _matching_rects(parts, term)
+                    if rectangles:
+                        return _location(index + 1, rectangles, page.rect.width, page.rect.height)
+    # Scans and photos have no digital text layer. Reuse saved OCR coordinates;
+    # no second OCR run and no estimated character positions on the image.
+    pages = sorted((document_ir or {}).get("pages", []), key=lambda page: page.get("number") != preferred_page)
+    for page in pages:
+        if not page.get("width") or not page.get("height"):
+            continue
+        parts = [(block["text"], pymupdf.Rect(tuple(block["bbox"][key] for key in ("x0", "y0", "x1", "y1"))), index)
+                 for index, block in enumerate(page.get("blocks", [])) if block.get("source") == "ocr" and block.get("bbox")]
+        rectangles = _matching_rects(parts, evidence)
+        if rectangles:
+            return _location(page.get("number") or 1, rectangles, page["width"], page["height"])
     return None

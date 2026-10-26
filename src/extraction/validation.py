@@ -122,6 +122,10 @@ def merge_extractions(results: list[dict[str, Any]]) -> dict[str, Any]:
                         for name, value in party.items():
                             if existing.get(name) is None:
                                 existing[name] = value
+            elif key == "vat":
+                current = merged[key]
+                if current.get("rate") is None and current.get("mode") not in {"included", "excluded", "not_subject"} and not current.get("raw_value"):
+                    merged[key] = deepcopy(item)
             elif merged[key].get("value") is None and not merged[key].get("raw_value"):
                 merged[key] = deepcopy(item)
     return merged
