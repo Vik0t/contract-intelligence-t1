@@ -74,7 +74,7 @@ backend (FastAPI :8000)
 
 ### Требования
 
-- Для серверного запуска: Linux, Docker Engine и Docker Compose **2.30+**.
+- Для серверного запуска: Linux, Docker Engine **23+** с BuildKit и Docker Compose **2.30+**.
 - Для локальных моделей: NVIDIA GPU, драйвер с поддержкой CUDA 12.8 и NVIDIA Container Toolkit.
 - Для DeepCode: адрес OpenAI-совместимого API, ключ и доступ к выбранной модели.
 - Для запуска без Docker: Python **3.12–3.13**, `uv`, Node.js **22** и npm. Нужны LibreOffice и Tesseract с языками `rus` и `eng`; в Docker они уже установлены.
@@ -117,8 +117,10 @@ ML_ALLOW_EXTERNAL=false
 | `CONTRACT_MODEL_QUANTIZATION` | нет | `bf16` | Режим CUDA-модели; `8bit` доступен как альтернативный режим. |
 | `SUMMARY_LOCAL_MODEL_NAME` | нет | `Qwen/Qwen3-8B` | Локальная модель сводки и рисков. |
 | `ML_KEEP_MODELS_LOADED` | нет | `false` | Удерживать модели в GPU-памяти; при `false` они выгружаются между этапами. |
-| `CONTRACT_MODEL_REVISION`, `SUMMARY_LOCAL_MODEL_REVISION` | нет | Не закреплены | SHA ревизий моделей для воспроизводимого развёртывания. |
+| `CONTRACT_MODEL_REVISION`, `SUMMARY_LOCAL_MODEL_REVISION` | нет | SHA в `.env.server.example` | Закреплённые ревизии моделей для воспроизводимого развёртывания. |
 | `OPENAI_BASE_URL`, `OPENAI_API_KEY` | да для API | — | Адрес и ключ DeepCode; задаются в `.env.api`. |
+| `ML_API_TRUST_ENV` | нет | `false` | Использовать proxy и CA-настройки окружения при обращении к API; включите, если они нужны вашей сети. |
+| `ML_API_CONNECT_RETRIES` | нет | `2` | Число повторов установки соединения, от 0 до 3; завершённые запросы не повторяются. |
 | `EXTRACTION_API_MODEL`, `SUMMARY_MODEL_NAME`, `RISK_MODEL_NAME` | да для API | `qwen3.8-flash-next` | Идентификаторы моделей в API-профиле. |
 
 Если увеличиваете размер загрузки, измените также `client_max_body_size` в `deploy/nginx.conf`. Для фотографий действуют отдельные ограничения: ширина и высота не меньше 320 пикселей, площадь не больше 40 мегапикселей.
@@ -209,6 +211,7 @@ uv run python -m pytest -q tests/test_api_extraction.py tests/test_insights_api.
 
 # Проверка production-сборки интерфейса из корня репозитория.
 npm --prefix frontend ci
+npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
@@ -219,6 +222,7 @@ npm --prefix frontend run build
 | `scripts.check_runtime` | Проверить CUDA, OCR, LibreOffice и наличие весов без генерации. | До запуска локального сервера. |
 | `scripts.download_models` | Загрузить модели и вывести фактические ревизии. | Первичная подготовка и обновление весов. |
 | `scripts.ml_check` | Проверить парсинг, извлечение 11 реквизитов, сводку и контрольные риски. | Проверка установки с реальными моделями. |
+| `scripts.check_deployment` | Загрузить синтетические PDF/DOCX/JPG через HTTP, проверить поля, сводку, риски, оригинал, выделения и подтверждение оператора. | Сквозная проверка запущенного стенда. |
 | `scripts.benchmark_models` | Сравнить модели на синтетических примерах с повторными замерами. | Быстрая проверка совместимости и задержки. |
 | `scripts.benchmark_dataset` | Сравнить обработку всех файлов корпуса на одинаковых подготовленных входах. | Оценка на реальных договорах; подробности в `evals/README.md`. |
 
@@ -238,7 +242,7 @@ uv run python -m scripts.benchmark_models \
 
 ## API
 
-При прямом запуске интерактивная документация FastAPI доступна на `http://127.0.0.1:8000/docs`, схема — на `/openapi.json`. Через Docker/Nginx базовый путь API — `http://127.0.0.1:8080/api`, схема доступна на `/api/openapi.json`. Пути в таблицах ниже указаны относительно backend, без префикса `/api`.
+При прямом запуске интерактивная документация FastAPI доступна на `http://127.0.0.1:8000/docs`, схема — на `/openapi.json`. Через Docker/Nginx базовый путь API — `http://127.0.0.1:8080/api`, документация — `/api/docs`, схема — `/api/openapi.json`. Пути в таблицах ниже указаны относительно backend, без префикса `/api`.
 
 ### Авторизация (`/auth`, `/users`)
 
@@ -249,6 +253,8 @@ uv run python -m scripts.benchmark_models \
 | `POST` | `/auth/logout` | Завершить сессию, передав `session_token` в JSON. |
 | `POST` | `/auth/validate` | Проверить `session_token`. |
 | `GET` | `/users/me` | Получить профиль текущего пользователя. |
+| `PUT` | `/users/me` | Обновить профиль текущего пользователя. |
+| `DELETE` | `/users/me` | Удалить текущую учётную запись и связанные данные. |
 
 Для защищённых запросов передавайте заголовок `Authorization: Bearer SESSION_TOKEN`, подставляя токен из ответа `/auth/login`.
 
@@ -266,8 +272,10 @@ uv run python -m scripts.benchmark_models \
 | `POST` | `/documents/{document_id}/insights` | Сформировать заново сводку и риски; ошибки этапов возвращаются в `errors`. |
 | `GET` | `/documents/{document_id}/content` | Получить подготовленный текст по страницам. |
 | `GET` | `/documents/{document_id}/pages/{page_number}/image` | Получить изображение страницы оригинала. |
+| `GET` | `/documents/{document_id}/preview` | Получить уменьшенное изображение первой страницы для библиотеки. |
 | `POST` | `/documents/{document_id}/source-location` | Найти координаты цитаты по `evidence` и необязательному `page`. |
 | `GET` | `/documents/{document_id}/file` | Скачать исходный файл. |
+| `PATCH` | `/documents/{document_id}` | Переместить документ в папку или общий список, передав `folder_id`. |
 | `DELETE` | `/documents/{document_id}` | Удалить документ и связанные данные. |
 
 **Тело запроса `PATCH /documents/{document_id}/review`:**
@@ -350,4 +358,5 @@ API на `8000` и PostgreSQL на `5432` не публикуются на хо�
 - [Эксплуатация](docs/OPERATIONS.md) — задания, ограничения загрузки и восстановление.
 - [ML-аудит](docs/ML_AUDIT.md) — описание проверок ML.
 - [Оценка моделей](evals/README.md) — сравнение моделей на корпусе.
+- [Демонстрация](docs/DEMO.md) — подготовка стенда и сценарий показа.
 - [Эталонная разметка](meta/README.md) — формат данных для оценки извлечения.

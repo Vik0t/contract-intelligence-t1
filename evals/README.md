@@ -1,5 +1,7 @@
 # Offline evaluation
 
+Completed comparison: [125-file results, 27 October 2026](RESULTS_2026-10-27.md).
+
 ## Full corpus comparison
 
 `scripts.benchmark_dataset` compares local NuExtract3 with the configured DeepCode
