@@ -5,10 +5,19 @@ import pytest
 from src.extraction import risks, summary
 
 
+@pytest.fixture(autouse=True)
+def explicitly_enable_mocked_hosted_analysis(monkeypatch):
+    monkeypatch.setenv("ML_ALLOW_EXTERNAL", "true")
+    monkeypatch.setenv("ML_HF_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("SUMMARY_BACKEND", "api")
+    monkeypatch.setenv("RISK_BACKEND", "api")
+
+
 def test_deepcode_provider_uses_configured_openai_compatible_endpoint(monkeypatch):
     called = {}
 
     class FakeResponse:
+        status_code = 200
         def raise_for_status(self):
             pass
 
@@ -29,6 +38,9 @@ def test_deepcode_provider_uses_configured_openai_compatible_endpoint(monkeypatc
             called["url"] = url
             called["headers"] = kwargs["headers"]
             called["json"] = kwargs["json"]
+            return FakeResponse()
+
+        def get(self, *_args, **_kwargs):
             return FakeResponse()
 
     monkeypatch.setenv("SUMMARY_PROVIDER", "deepcode")

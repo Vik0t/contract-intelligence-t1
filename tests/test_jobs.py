@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from threading import Event
+from datetime import datetime, timedelta
 
 import backend.database as database
 from backend.jobs import JobManager
@@ -67,3 +68,29 @@ def test_job_manager_is_idempotent_and_completes(tmp_path):
         assert calls == [("parse", document_id)]
     finally:
         manager.shutdown()
+
+
+def test_restart_recovers_recent_running_job_and_commits_it(tmp_path):
+    engine = database.get_engine(f"sqlite:///{tmp_path / 'restart.db'}")
+    database.create_tables(engine)
+    db = database.get_session(engine)
+    user = database.create_user(db, username="restart", email="restart@example.com", password_hash="unused")
+    doc = database.create_document(db, owner=user.id, template_id=None, filename="doc.pdf")
+    job, _ = database.create_job(db, document_id=doc.id, kind="extract", max_attempts=3)
+    job.status = "running"
+    job.started_at = datetime.now() - timedelta(seconds=5)
+    db.commit()
+    job_id = job.id
+    db.close()
+    completed = Event()
+    manager = JobManager(engine, lambda *_args: completed.set())
+    try:
+        manager.recover()
+        assert completed.wait(5), "A recently interrupted job must not wait 30 minutes"
+    finally:
+        manager.shutdown()
+    db = database.get_session(engine)
+    try:
+        assert database.get_job(db, job_id).status == "completed"
+    finally:
+        db.close()

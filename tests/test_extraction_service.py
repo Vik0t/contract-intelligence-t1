@@ -9,6 +9,11 @@ from backend.config import Settings
 from backend.extraction import ExtractionService
 
 
+@pytest.fixture(autouse=True)
+def explicitly_enable_mocked_hosted_extraction(monkeypatch):
+    monkeypatch.setenv("ML_ALLOW_EXTERNAL", "true")
+
+
 def test_extraction_service_uses_local_backend_by_default(monkeypatch) -> None:
     calls = []
 

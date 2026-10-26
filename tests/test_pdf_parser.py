@@ -42,6 +42,19 @@ class FakeOCRBackend:
         ]
 
 
+def test_pdf_font_runs_are_read_in_visual_order(tmp_path):
+    path = tmp_path / "font-runs.pdf"
+    with pymupdf.open() as pdf:
+        page = pdf.new_page()
+        # Deliberately write the right-hand font run first in PDF object order.
+        page.insert_text((200, 80), "-2026-017", fontname="Times-Roman", fontsize=12)
+        page.insert_text((72, 80), "CONTRACT NUMBER", fontname="helv", fontsize=12)
+        pdf.save(path)
+    parsed = parse_pdf(path)
+    text = " ".join(block.text for block in parsed.pages[0].blocks)
+    assert text.index("CONTRACT NUMBER") < text.index("-2026-017")
+
+
 def test_tesseract_result_is_mapped_to_document_ir() -> None:
     def fake_image_to_data(image, **kwargs):
         assert image.mode == "RGB"

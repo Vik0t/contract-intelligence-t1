@@ -1,0 +1,100 @@
+name: contract-intelligence
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: contracts
+      POSTGRES_USER: contracts
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.server}
+    volumes:
+      - database:/var/lib/postgresql/data
+    networks: [private]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U contracts -d contracts"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: contract-intelligence-backend:local
+    build: {context: ., dockerfile: Dockerfile}
+    env_file: ${SERVER_ENV_FILE:-.env.server}
+    environment:
+      DATABASE_URL: postgresql://contracts:${POSTGRES_PASSWORD}@db:5432/contracts
+      DOCUMENT_STORAGE_DIR: /data/uploads
+      HF_HOME: /models
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      ML_ALLOW_EXTERNAL: "false"
+      EXTRACTION_BACKEND: local
+      SUMMARY_BACKEND: local
+      RISK_BACKEND: local
+      JOB_WORKER_COUNT: "1"
+      DOCX_USE_RENDERED_PAGES: "true"
+    gpus: all
+    volumes:
+      - documents:/data
+      - models:/models:ro
+    networks: [private]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 5m
+    shm_size: 2gb
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)"]
+      start_period: 90s
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build: {context: ., dockerfile: frontend/Dockerfile}
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:8080"]
+    networks: [edge, private]
+    depends_on:
+      backend: {condition: service_healthy}
+    restart: unless-stopped
+
+  model-download:
+    image: contract-intelligence-backend:local
+    build: {context: ., dockerfile: Dockerfile}
+    profiles: [setup]
+    env_file: ${SERVER_ENV_FILE:-.env.server}
+    environment:
+      HF_HOME: /models
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
+    volumes: [models:/models]
+    networks: [download]
+    command: [python, -m, scripts.download_models]
+
+  ml-check:
+    image: contract-intelligence-backend:local
+    profiles: [validation]
+    env_file: ${SERVER_ENV_FILE:-.env.server}
+    environment:
+      HF_HOME: /models
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      ML_ALLOW_EXTERNAL: "false"
+      EXTRACTION_BACKEND: local
+      SUMMARY_BACKEND: local
+      RISK_BACKEND: local
+      DOCX_USE_RENDERED_PAGES: "true"
+    gpus: all
+    networks: [private]
+    volumes: ["models:/models:ro", "reports:/reports"]
+    command: [python, -m, scripts.ml_check, --output, /reports/ml-check.json]
+
+volumes:
+  database:
+  documents:
+  models:
+  reports:
+networks:
+  private: {internal: true}
+  edge:
+  download:

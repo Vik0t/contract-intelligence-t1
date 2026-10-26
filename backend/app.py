@@ -26,7 +26,7 @@ from backend.config import get_settings
 from backend.file_validation import UploadValidationError, validate_document_file
 from backend.extraction import ExtractionService
 from backend.jobs import JobManager
-from backend.document_view import ViewUnavailable, locate_evidence, page_count as visual_page_count, render_page
+from backend.document_view import ViewUnavailable, locate_evidence, page_count as visual_page_count, render_page, view_pdf_path
 
 from src.local_extraction import extract_text_from_document
 from src.extraction.summary import summarize_document
@@ -71,6 +71,18 @@ PROCESSING_LOCK = threading.Lock()
 @app.get("/ping")
 async def ping():
     return "pong!"
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def readiness():
+    from sqlalchemy import text
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    # Weight and GPU checks run once in scripts.serve before this process starts.
+    return {"status": "ready", "database": "ok", "extraction": settings.extraction_backend}
 
 
 @app.get("/", include_in_schema=False)
@@ -301,7 +313,14 @@ def process_document_parsing(document_id: int):
             with PROCESSING_LOCK:
                 started_at = datetime.now()
                 logger.info(f"Calling extract_text_from_document for {document_id}")
-                parsed_text, document_ir = extract_text_from_document(stored_path)
+                parse_path = stored_path
+                if Path(stored_path).suffix.lower() == '.docx' and os.getenv('DOCX_USE_RENDERED_PAGES', 'false').lower() == 'true':
+                    parse_path = view_pdf_path(stored_path)
+                parsed_text, document_ir = extract_text_from_document(parse_path)
+                if str(parse_path) != str(stored_path):
+                    from src.document_ir import SourceFormat
+                    document_ir.source_format = SourceFormat.DOCX
+                    document_ir.source_path = str(stored_path)
                 parsing_time = (datetime.now() - started_at).total_seconds()
                 logger.info(f"Document {document_id} parsed successfully in {parsing_time:.2f}s. Text length: {len(parsed_text)}")
 

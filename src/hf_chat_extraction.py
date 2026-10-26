@@ -11,6 +11,7 @@ from src.extraction.postprocess import postprocess_extraction, validate_extracti
 from src.extraction.schema import CONTRACT_TEMPLATE, INSTRUCTIONS
 from src.extraction.summary import generate_chat
 from src.hf_space_extraction import build_retrieved_context
+from src.extraction.validation import validate_model_result
 
 
 def extract_fields_with_hf_chat(
@@ -44,6 +45,7 @@ def extract_fields_with_hf_chat(
     result = postprocess_extraction(parsed, text)
     if document_ir is not None:
         result = validate_extraction(result, document_ir)
+    result = validate_model_result(result, text)
     prompt_tokens = len(prompt.split())
     completion_tokens = len(raw.split())
     return result, {

@@ -14,7 +14,7 @@ from transformers import AutoModelForMultimodalLM, AutoProcessor, BitsAndBytesCo
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "numind/NuExtract3"
+MODEL_ID = os.getenv("CONTRACT_MODEL_ID", "numind/NuExtract3")
 MODEL_QUANTIZATION_ENV = "CONTRACT_MODEL_QUANTIZATION"
 DEFAULT_MODEL_QUANTIZATION = "bf16"
 
@@ -111,10 +111,11 @@ def load_model() -> tuple[Any, Any]:
     if use_mlx():
         from mlx_lm import load as mlx_load
 
-        model, tokenizer = mlx_load("numind/NuExtract3-mlx-8bits")
+        model, tokenizer = mlx_load(os.getenv("CONTRACT_MLX_MODEL_ID", "numind/NuExtract3-mlx-8bits"))
         return model, tokenizer
 
-    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    revision = os.getenv("CONTRACT_MODEL_REVISION") or None
+    processor = AutoProcessor.from_pretrained(MODEL_ID, revision=revision, trust_remote_code=True)
 
     if torch.cuda.is_available():
         device = "cuda"
@@ -150,6 +151,7 @@ def load_model() -> tuple[Any, Any]:
         "dtype": dtype,
         "device_map": device,
         "trust_remote_code": True,
+        "revision": revision,
         "low_cpu_mem_usage": True,
     }
     if effective_mode == "8bit":
@@ -180,7 +182,15 @@ def load_model() -> tuple[Any, Any]:
                 llm_int8_threshold=6.0,
             ),
             "trust_remote_code": True,
+            "revision": revision,
             "low_cpu_mem_usage": True,
         }
         model = AutoModelForMultimodalLM.from_pretrained(MODEL_ID, **fallback_kwargs).eval()
     return processor, model
+
+
+def unload_model() -> None:
+    from src.extraction.runtime import MODEL_LOCK, release_device_memory
+    with MODEL_LOCK:
+        load_model.cache_clear()
+        release_device_memory()
