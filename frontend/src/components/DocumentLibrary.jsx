@@ -3,7 +3,7 @@ import { fileExtension, formatDate } from '../contractFields.js';
 import DocumentPreview from './DocumentPreview.jsx';
 
 function documentStatus(document) {
-  if (document.has_metadata && document.review_status === 'reviewed') return { label: 'Проверено', tone: 'ready' };
+  if (document.has_metadata && document.review_status === 'reviewed') return { label: 'Поля проверены', tone: 'ready' };
   if (document.has_metadata) return { label: 'Нужно проверить', tone: 'attention' };
   if (document.status === 'processing') return { label: 'Анализируем документ…', tone: 'processing' };
   if (document.status === 'failed') return { label: 'Требует внимания', tone: 'attention' };

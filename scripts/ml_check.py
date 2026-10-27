@@ -89,7 +89,7 @@ def main() -> None:
     from backend.document_view import view_pdf_path
     from src.extraction.pipeline import extract_text_from_document
     from src.extraction.summary import summarize_document
-    from src.extraction.risks import analyze_risks
+    from src.extraction.risk_review import review_contract_risks
     from src.extraction.context import evidence_pages
     from scripts.check_runtime import check_runtime
 
@@ -113,9 +113,10 @@ def main() -> None:
                 else:
                     fields, usage = service.extract(text=text, document_ir=document_ir)
                     summary = summarize_document(text, fields)
-                    risks = analyze_risks(text, fields)
+                    risk_review = review_contract_risks(text, fields, {'contract_type': 'supply', 'user_side': 'customer', 'scope_confirmed': True})
+                    risks = risk_review['findings']
                     field_checks = score(fields)
-                    record.update(field_checks=field_checks, fields_passed=sum(field_checks.values()), fields_total=len(field_checks), fields=fields, usage=usage, summary=summary, risks=risks)
+                    record.update(field_checks=field_checks, fields_passed=sum(field_checks.values()), fields_total=len(field_checks), fields=fields, usage=usage, summary=summary, risks=risks, risk_review=risk_review)
                     record["risk_checks"] = {
                         "price_change_detected": any("цен" in item["evidence"].casefold() for item in risks),
                         "penalty_detected": any("неустой" in item["evidence"].casefold() for item in risks),
@@ -131,7 +132,7 @@ def main() -> None:
             neutral = "PAGE 1\nПоставка осуществляется по согласованной сторонами спецификации. Изменения договора оформляются письменным соглашением обеих сторон. Ответственность определяется законодательством Российской Федерации."
             negative = {"format": "risk_negative_control", "passed": False}
             try:
-                negative["risks"] = analyze_risks(neutral, {})
+                negative["risks"] = review_contract_risks(neutral, {}, {"contract_type": "supply", "user_side": "customer", "scope_confirmed": True})["findings"]
                 negative["passed"] = negative["risks"] == []
             except Exception as exc:
                 negative["error"] = f"{type(exc).__name__}: {exc}"

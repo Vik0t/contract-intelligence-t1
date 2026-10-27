@@ -108,6 +108,22 @@ export default function App() {
     return () => window.clearInterval(intervalId);
   }, [hasProcessingDocuments, loadLibrary, token]);
 
+  const runningRiskDocumentId = selectedDocument?.metadata?.risk_review?.status === 'running' ? selectedDocument.id : null;
+  useEffect(() => {
+    if (!token || !runningRiskDocumentId) return undefined;
+    const controller = new AbortController();
+    const intervalId = window.setInterval(async () => {
+      try {
+        const updated = await request(`/documents/${runningRiskDocumentId}`, { headers: authHeaders(token), signal: controller.signal });
+        if (activeTokenRef.current !== token || controller.signal.aborted) return;
+        setSelectedDocument((current) => current?.id === runningRiskDocumentId && current.metadata?.risk_review?.status === 'running' ? updated : current);
+      } catch (requestError) {
+        if (!controller.signal.aborted && activeTokenRef.current === token && requestError.status === 401) clearSession();
+      }
+    }, 3000);
+    return () => { window.clearInterval(intervalId); controller.abort(); };
+  }, [runningRiskDocumentId, token, clearSession]);
+
   const openDocument = useCallback(async (document) => {
     setError('');
     try {
@@ -335,6 +351,24 @@ export default function App() {
     }
   };
 
+  const reviewDocumentRisks = async (document, profile) => {
+    setError('');
+    const pending = { status: 'running', profile };
+    setSelectedDocument((current) => current?.id === document.id ? { ...current, metadata: { ...current.metadata, risks: null, risk_review: pending } } : current);
+    try {
+      const result = await request(`/documents/${document.id}/risks`, { method: 'POST', headers: authHeaders(token), body: JSON.stringify(profile) });
+      if (activeTokenRef.current !== token) return;
+      setSelectedDocument((current) => current?.id === document.id && current.metadata?.risk_review === pending ? { ...current, metadata: result.metadata } : current);
+      return result;
+    } catch (requestError) {
+      if (activeTokenRef.current === token) {
+        if (requestError.status === 401) clearSession();
+        setSelectedDocument((current) => current?.id === document.id && current.metadata?.risk_review === pending ? { ...current, metadata: { ...current.metadata, risk_review: { ...pending, status: 'failed' } } } : current);
+      }
+      throw new Error(friendlyError(requestError));
+    }
+  };
+
   if (!token) {
     return (
       <main className="page-shell" id="top">
@@ -348,7 +382,7 @@ export default function App() {
     <main className="page-shell" id="top">
       <SiteHeader user={user} onHome={() => setSelectedDocument(null)} onLogout={logout} />
       {selectedDocument ? (
-        <DocumentWorkspace document={selectedDocument} token={token} error={error} onBack={() => { setSelectedDocument(null); setError(''); }} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} onReview={updateDocumentReview} onRefreshInsights={refreshDocumentInsights} />
+        <DocumentWorkspace document={selectedDocument} token={token} error={error} onBack={() => { setSelectedDocument(null); setError(''); }} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} onReview={updateDocumentReview} onRefreshInsights={refreshDocumentInsights} onReviewRisks={reviewDocumentRisks} />
       ) : (
         <DocumentLibrary token={token} folders={folders} documents={documents} totalDocuments={totalDocuments} selectedFolderId={selectedFolderId} selectedDocumentId={selectedDocument?.id} search={search} loading={libraryLoading} uploading={uploading} error={error} onSearch={setSearch} onSelectFolder={setSelectedFolderId} onUpload={handleUpload} onCreateFolder={createFolder} onDeleteFolder={deleteFolder} onMoveDocument={moveDocument} onOpen={openDocument} onOpenFile={openOriginalFile} onDelete={deleteDocument} onAnalyze={analyzeDocument} />
       )}

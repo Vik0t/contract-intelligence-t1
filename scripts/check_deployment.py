@@ -68,11 +68,16 @@ def main() -> None:
                     record["document_id"] = document_id
                     wait_for(client, document_id, lambda item: item["status"] == "ready", args.timeout)
                     client.post(f"/documents/{document_id}/analyze").raise_for_status()
-                    document = wait_for(client, document_id, lambda item: bool((item.get("metadata") or {}).get("summary")) and isinstance((item.get("metadata") or {}).get("risks"), list), args.timeout)
+                    document = wait_for(client, document_id, lambda item: bool((item.get("metadata") or {}).get("summary")), args.timeout)
                     metadata = document["metadata"]
                     checks = score(metadata["fields"])
                     record["field_checks"] = checks
                     assert all(checks.values()), f"Incorrect synthetic fields: {[key for key, value in checks.items() if not value]}"
+                    risk_response = client.post(f"/documents/{document_id}/risks", json={"contract_type": "supply", "user_side": "customer", "scope_confirmed": True})
+                    risk_response.raise_for_status()
+                    metadata = risk_response.json()["metadata"]
+                    assert metadata["risk_review"]["status"] == "complete", "Catalog risk review did not complete"
+                    assert metadata["risk_review"]["coverage"]["global_review_complete"]
                     risks = metadata["risks"]
                     assert any("цен" in item["evidence"].casefold() for item in risks), "Price-change risk missing"
                     assert any("неустой" in item["evidence"].casefold() for item in risks), "Uncapped penalty risk missing"
@@ -105,7 +110,10 @@ def main() -> None:
                     refreshed = client.post(f"/documents/{document_id}/insights")
                     refreshed.raise_for_status()
                     assert not refreshed.json()["errors"], "Analysis refresh returned errors"
-                    assert refreshed.json()["metadata"]["summary"] and isinstance(refreshed.json()["metadata"]["risks"], list)
+                    assert refreshed.json()["metadata"]["summary"]
+                    refreshed_risks = client.post(f"/documents/{document_id}/risks", json={"contract_type": "supply", "user_side": "customer", "scope_confirmed": True})
+                    refreshed_risks.raise_for_status()
+                    assert refreshed_risks.json()["metadata"]["risk_review"]["status"] == "complete"
                     client.patch(f"/documents/{document_id}/review", json={"confirmed": True}).raise_for_status()
                     record.update(passed=True, elapsed_sec=round(time.monotonic() - started, 2))
                     print(json.dumps(record), flush=True)

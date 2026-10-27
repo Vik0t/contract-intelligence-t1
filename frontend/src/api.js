@@ -59,6 +59,7 @@ export function friendlyError(error) {
   if (error?.status === 401) return 'Сессия закончилась. Войдите снова.';
   if (error?.status === 404) return 'Документ или папка не найдены.';
   if (error?.status === 409) {
+    if (error.message?.includes('сторона проверки') || error.message?.includes('извлеките поля')) return error.message;
     if (error.message?.includes('prepared')) return 'Документ ещё подготавливается.';
     if (error.message?.includes('running')) return 'Анализ этого документа уже выполняется.';
     return 'Папка с таким названием уже существует.';

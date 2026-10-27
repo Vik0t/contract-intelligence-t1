@@ -312,3 +312,20 @@ label { color: var(--ink); font-size: 12px; font-weight: 750; letter-spacing: 0.
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+.risk-profile { padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.risk-profile fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 14px; }
+.risk-profile label { text-transform: none; letter-spacing: normal; display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
+.risk-profile .risk-profile-confirmation { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.5; font-weight: 400; }
+.risk-profile-confirmation input { width: 18px; height: 18px; flex: 0 0 18px; margin-top: 2px; accent-color: var(--blue-dark); }
+.risk-review-context { display: grid; gap: 7px; padding: 18px 0 10px; }
+.risk-review-context span { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.risk-passages { margin: 14px 0; }
+.risk-passages > strong, .risk-recommendation > strong { font-size: 12px; }
+.risk-passages blockquote { margin: 8px 0; padding-left: 12px; border-left: 2px solid var(--line); color: var(--ink); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.risk-basis { margin: 16px 0; font-size: 13px; line-height: 1.5; }
+.risk-basis summary { cursor: pointer; color: var(--blue-dark); font-weight: 700; padding: 8px 0; }
+.risk-basis p, .risk-basis li { margin: 8px 0; }
+.risk-basis ul { padding-left: 20px; }
+.risk-basis a { overflow-wrap: anywhere; }
+.risk-questions { padding: 16px 0; border-bottom: 1px solid var(--line); }

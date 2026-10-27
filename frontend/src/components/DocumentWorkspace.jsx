@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { authHeaders, request, requestBlob } from '../api.js';
+import RiskReviewPanel from './RiskReviewPanel.jsx';
 import {
   cloneFields,
   FIELD_ORDER,
@@ -353,29 +354,11 @@ function buildSummary(fields) {
   };
 }
 
-function deriveRisks(fields) {
-  const risks = [];
-  const add = (title, body, fieldKey) => {
-    const field = fields[fieldKey];
-    risks.push({ title, body, evidence: getFieldEvidence(fieldKey, field), page: getFieldPage(fieldKey, field) });
-  };
-  if (!getFieldValue('term', fields.term)) add('Срок действия не найден', 'Проверьте, определён ли момент окончания обязательств сторон.', 'term');
-  const termText = `${fields.term?.raw_value ?? ''} ${fields.term?.evidence ?? ''}`;
-  if (/до полного исполнения/i.test(termText)) add('Открытая формулировка срока', 'Договор действует до полного исполнения обязательств. Стоит проверить, достаточно ли чётко определён момент завершения.', 'term');
-  if (!getFieldValue('total_amount', fields.total_amount)) add('Не найден предел суммы', 'Проверьте цену договора, лимит обязательств и порядок её изменения.', 'total_amount');
-  const vatText = `${fields.vat?.raw_value ?? ''} ${fields.vat?.evidence ?? ''}`;
-  if (fields.vat?.mode === 'not_stated' || /при наличии|если применим/i.test(vatText)) add('Условия НДС неоднозначны', 'Из найденной формулировки нельзя уверенно определить, включён ли НДС в сумму.', 'vat');
-  const parties = getFieldValue('parties', fields.parties);
-  if (!Array.isArray(parties) || parties.length < 2) add('Не все стороны определены', 'Проверьте преамбулу и раздел с реквизитами.', 'parties');
-  else if (parties.some((party) => !party.inn)) risks.push({ title: 'Не у всех сторон найден ИНН', body: 'Проверьте реквизиты контрагентов.', evidence: partyEvidence(parties.find((party) => !party.inn)), page: partyPage(parties.find((party) => !party.inn)) });
-  return risks;
-}
-
 function SummaryPanel({ fields, summary, onRefresh, refreshing, insightError }) {
   const derived = buildSummary(fields);
   return (
     <div className="summary-panel">
-      <div className="insights-heading"><p className="panel-kicker">Краткая сводка</p><button type="button" className="source-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Анализируем…' : summary ? 'Обновить анализ' : 'Создать сводку'}</button></div>
+      <div className="insights-heading"><p className="panel-kicker">Краткая сводка</p><button type="button" className="source-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Анализируем…' : summary ? 'Обновить сводку' : 'Создать сводку'}</button></div>
       {insightError ? <p className="insights-error" role="alert">{insightError}</p> : null}
       {summary ? (
         <p className="summary-ai-text">{summary}</p>
@@ -390,26 +373,7 @@ function SummaryPanel({ fields, summary, onRefresh, refreshing, insightError }) 
   );
 }
 
-function RisksPanel({ fields, savedRisks, onSelectSource, onRefresh, refreshing, insightError }) {
-  const risks = Array.isArray(savedRisks) ? savedRisks : deriveRisks(fields);
-  return (
-    <div className="risks-panel">
-      <div className="insights-heading"><span className="panel-kicker">Предварительный анализ</span><button type="button" className="source-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Проверяем…' : savedRisks === null || savedRisks === undefined ? 'Проверить договор' : 'Обновить анализ'}</button></div>
-      {insightError ? <p className="insights-error" role="alert">{insightError}</p> : null}
-      <div className="risk-disclaimer">{Array.isArray(savedRisks) ? 'Риски найдены по тексту договора. Проверьте цитату в оригинале. Не заменяет юридическую экспертизу.' : 'Пока показаны подсказки по полям. Для анализа текста договора нажмите «Проверить договор».'}</div>
-      {risks.length ? risks.map((risk) => (
-        <section className="risk-row" key={risk.title}>
-          <span className="risk-level">Проверить</span>
-          <h3>{risk.title}</h3>
-          <p>{risk.body}</p>
-          <SourceButton evidence={risk.evidence} page={risk.page} onSelect={onSelectSource} />
-        </section>
-      )) : <div className="empty-panel"><strong>{Array.isArray(savedRisks) ? 'По доступному тексту риски не найдены' : 'По доступным полям явных сигналов нет'}</strong><span>{Array.isArray(savedRisks) ? 'Оператору всё равно стоит просмотреть важные условия договора.' : 'Для полноценного анализа нажмите «Проверить договор».'}</span></div>}
-    </div>
-  );
-}
-
-export default function DocumentWorkspace({ document, token, error, onBack, onOpenFile, onAnalyze, onSaveMetadata, onReview, onRefreshInsights }) {
+export default function DocumentWorkspace({ document, token, error, onBack, onOpenFile, onAnalyze, onSaveMetadata, onReview, onRefreshInsights, onReviewRisks }) {
   const [activeTab, setActiveTab] = useState('fields');
   const [selectedSource, setSelectedSource] = useState(null);
   const [sourceLocation, setSourceLocation] = useState(null);
@@ -426,7 +390,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
   const noticeTimeoutRef = useRef(null);
   const fields = document.metadata?.fields ?? {};
   const reviewCount = useMemo(() => document.review_status === 'reviewed' ? 0 : orderedEntries(fields).filter(([key, field]) => fieldNeedsReview(key, field)).length, [fields, document.review_status]);
-  const riskCount = useMemo(() => Array.isArray(document.metadata?.risks) ? document.metadata.risks.length : deriveRisks(fields).length, [document.metadata?.risks, fields]);
+  const riskCount = document.metadata?.risk_review?.status === 'complete' ? document.metadata.risk_review.findings.length : 0;
 
   useEffect(() => {
     setEditing(false);
@@ -523,7 +487,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
     try {
       const result = await onRefreshInsights(document);
       if (result.errors?.length) setInsightError(result.errors.join(' '));
-      else showNotice('Сводка и риски обновлены');
+      else showNotice('Сводка обновлена');
     } catch {
       setInsightError('Не удалось обновить анализ. Повторите попытку позже.');
     } finally {
@@ -548,8 +512,8 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
             {hasMetadata && !editing ? <button className="secondary-button" type="button" onClick={exportJson}>Скачать JSON</button> : null}
             {document.has_file ? <button className="secondary-button" type="button" onClick={() => onOpenFile(document)}>Открыть оригинал</button> : null}
             {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" onClick={() => { setDraftFields(cloneFields(fields)); setActiveTab('fields'); setEditing(true); }}>Редактировать</button> : null}
-            {hasMetadata && !editing && document.review_status !== 'reviewed' ? <button className="primary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить проверку'}</button> : null}
-            {hasMetadata && !editing && document.review_status === 'reviewed' ? <button className="secondary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(false)}>Вернуть на проверку</button> : null}
+            {hasMetadata && !editing && document.review_status !== 'reviewed' ? <button className="primary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить поля'}</button> : null}
+            {hasMetadata && !editing && document.review_status === 'reviewed' ? <button className="secondary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(false)}>Вернуть поля на проверку</button> : null}
             {editing ? <button className="secondary-button" type="button" onClick={() => { setEditing(false); setDraftFields(cloneFields(fields)); }}>Отменить</button> : null}
             {editing ? <button className="primary-button compact-button" type="button" disabled={saving} onClick={saveMetadata}>{saving ? 'Сохраняем…' : 'Сохранить'}</button> : null}
           </div>
@@ -561,7 +525,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
       {hasMetadata ? (
         <div className={`review-state${document.review_status === 'reviewed' ? ' is-reviewed' : ''}`}>
           <span aria-hidden="true" />
-          <strong>{document.review_status === 'reviewed' ? 'Проверено оператором' : 'Ожидает проверки оператора'}</strong>
+          <strong>{document.review_status === 'reviewed' ? 'Поля проверены оператором' : 'Поля ожидают проверки оператора'}</strong>
           {document.review_status === 'reviewed' && document.reviewed_at ? <time dateTime={document.reviewed_at}>{new Date(document.reviewed_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })}</time> : <small>Проверьте сомнительные значения и подтвердите результат.</small>}
         </div>
       ) : null}
@@ -585,7 +549,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
               {editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : null}
               {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} reviewed={document.review_status === 'reviewed'} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
               {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
-              {!editing && activeTab === 'risks' ? <RisksPanel fields={fields} savedRisks={document.metadata?.risks} onSelectSource={setSelectedSource} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
+              {!editing && activeTab === 'risks' ? <RiskReviewPanel key={document.id} fields={fields} review={document.metadata?.risk_review} legacyRisks={document.metadata?.risks} onSelectSource={setSelectedSource} onRun={(profile) => onReviewRisks(document, profile)} /> : null}
             </div>
           </aside>
           <section className="document-panel" aria-label="Текст договора">

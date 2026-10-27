@@ -31,7 +31,8 @@ from backend.document_view import ViewUnavailable, locate_evidence, page_count a
 
 from src.local_extraction import extract_text_from_document
 from src.extraction.summary import summarize_document
-from src.extraction.risks import analyze_risks
+from src.extraction.risk_review import RiskProfile, ReviewIncomplete, ScopeNotSupported, review_contract_risks
+from uuid import uuid4
 
 settings = get_settings()
 EXTRACTION_SERVICE = ExtractionService(settings)
@@ -41,6 +42,8 @@ EXTRACTION_SERVICE = ExtractionService(settings)
 async def lifespan(_app):
     """Recover durable jobs on startup and stop workers on shutdown."""
     JOB_MANAGER.recover()
+    with database.get_session(engine) as session:
+        database.recover_risk_reviews(session)
     try:
         yield
     finally:
@@ -219,6 +222,7 @@ def create_metadata_response(metadata):
         fields=metadata.fields,
         summary=getattr(metadata, 'summary', None),
         risks=getattr(metadata, 'risks', None),
+        risk_review=getattr(metadata, 'risk_review', None),
         created_at=metadata.created_at
     )
 
@@ -459,12 +463,8 @@ def process_metadata_extraction(document_id: int):
                 logger.warning(
                     f"Summary generation failed for document {document_id}: {summary_exc}"
                 )
-            try:
-                risk_items = analyze_risks(parsed_doc.text, extracted_data)
-                database.save_insights(db, document_id=document_id, expected_fields=extracted_data, risks=risk_items)
-                logger.info("Risk review saved for document %s", document_id)
-            except Exception as risk_exc:
-                logger.warning("Risk review failed for document %s: %s", document_id, risk_exc)
+            # A risk review needs the operator's explicit side and scope.
+            # Do not guess a perspective or publish generic risks in the background.
 
             existing_stats = database.get_stats(db, document_id=document_id)
             if existing_stats:
@@ -1118,6 +1118,7 @@ async def update_document_metadata(
         # Saving fields must remain immediate even when the analysis API is down.
         metadata.summary = None
         metadata.risks = None
+        metadata.risk_review = None
         db.commit()
 
         database.update_document(
@@ -1552,7 +1553,7 @@ async def get_source_location(document_id: int, body: api_requests.SourceLocatio
         db.close()
 
 
-@app.post('/documents/{document_id}/insights', summary='Generate summary and risk review')
+@app.post('/documents/{document_id}/insights', summary='Generate summary')
 async def refresh_document_insights(document_id: int, authorization: str = Header(...)):
     if not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Invalid authentication scheme')
@@ -1574,13 +1575,42 @@ async def refresh_document_insights(document_id: int, authorization: str = Heade
         except Exception as exc:
             logger.warning('Summary refresh failed for document %s: %s', document_id, exc)
             errors.append(insight_error_message(exc, 'summary'))
-        try:
-            risks = await run_in_threadpool(analyze_risks, parsed.text, analysis_fields)
-            metadata = database.save_insights(db, document_id, analysis_fields, risks=risks)
-        except Exception as exc:
-            logger.warning('Risk refresh failed for document %s: %s', document_id, exc)
-            errors.append(insight_error_message(exc, 'risks'))
         return {'metadata': create_metadata_response(metadata), 'errors': errors}
+    finally:
+        db.close()
+
+
+@app.post('/documents/{document_id}/risks', summary='Review supply or services contract from the selected side')
+async def review_document_risks(document_id: int, profile: RiskProfile, authorization: str = Header(...)):
+    if not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Invalid authentication scheme')
+    user, db = get_user_from_token(authorization.removeprefix('Bearer '))
+    try:
+        document = database.get_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail='Document not found')
+        verify_document_ownership(user, document)
+        parsed = database.get_parsed_document(db, document_id)
+        metadata = database.get_metadata(db, document_id)
+        if not parsed or not metadata:
+            raise HTTPException(status_code=409, detail='Сначала извлеките поля договора')
+        analysis_fields = deepcopy(metadata.fields)
+        review_id = uuid4().hex
+        pending = {'status': 'running', 'profile': profile.model_dump(), 'review_id': review_id}
+        database.start_risk_review(db, document_id, analysis_fields, pending)
+        try:
+            report = await run_in_threadpool(review_contract_risks, parsed.text, analysis_fields, profile)
+            metadata = database.finish_risk_review(db, document_id, analysis_fields, review_id, report)
+        except database.MetadataChangedError:
+            raise
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, (ScopeNotSupported, ReviewIncomplete)) else 'Не удалось полностью проверить договор. Повторите проверку; частичный результат не опубликован.'
+            status = 'unsupported' if isinstance(exc, ScopeNotSupported) else 'failed'
+            metadata = database.finish_risk_review(db, document_id, analysis_fields, review_id, {**pending, 'status': status, 'error': message})
+            logger.warning('Catalog risk review failed for document %s (%s)', document_id, type(exc).__name__)
+        return {'metadata': create_metadata_response(metadata)}
+    except database.MetadataChangedError as exc:
+        raise HTTPException(status_code=409, detail='Данные или сторона проверки изменились. Откройте актуальный документ и повторите проверку.') from exc
     finally:
         db.close()
 

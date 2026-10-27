@@ -82,6 +82,7 @@ class DocumentMetadata(Base):
     fields = Column(JSON, nullable=False)
     summary = Column(Text, nullable=True)
     risks = Column(JSON, nullable=True)
+    risk_review = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
 class Stats(Base):
@@ -180,6 +181,8 @@ def create_tables(engine):
             connection.execute(text('ALTER TABLE document_metadata ADD COLUMN summary TEXT'))
         if 'risks' not in metadata_columns:
             connection.execute(text('ALTER TABLE document_metadata ADD COLUMN risks JSON'))
+        if 'risk_review' not in metadata_columns:
+            connection.execute(text('ALTER TABLE document_metadata ADD COLUMN risk_review JSON'))
 
 def get_session(engine):
     """Create and return a new database session."""
@@ -491,6 +494,39 @@ def update_metadata(session, document_id, fields, summary=None, risks=None):
 
 class MetadataChangedError(RuntimeError):
     pass
+
+
+def start_risk_review(session, document_id, expected_fields, pending):
+    metadata = session.query(DocumentMetadata).filter_by(document_id=document_id).populate_existing().with_for_update().first()
+    if metadata is None or metadata.fields != expected_fields:
+        session.rollback()
+        raise MetadataChangedError("Fields changed while analysis was running")
+    metadata.risk_review = pending
+    metadata.risks = None
+    session.commit()
+    return metadata
+
+
+def recover_risk_reviews(session):
+    """A stopped HTTP process cannot complete its previously running reviews."""
+    for metadata in session.query(DocumentMetadata).filter(DocumentMetadata.risk_review.isnot(None)):
+        report = metadata.risk_review or {}
+        if report.get('status') == 'running':
+            metadata.risk_review = {**report, 'status': 'failed', 'error': 'Проверка прервана перезапуском сервиса. Запустите её повторно.'}
+            metadata.risks = None
+    session.commit()
+
+
+def finish_risk_review(session, document_id, expected_fields, review_id, report):
+    metadata = session.query(DocumentMetadata).filter_by(document_id=document_id).populate_existing().with_for_update().first()
+    if (metadata is None or metadata.fields != expected_fields
+            or (metadata.risk_review or {}).get('review_id') != review_id):
+        session.rollback()
+        raise MetadataChangedError("Risk review or fields changed while analysis was running")
+    metadata.risk_review = {**report, 'review_id': review_id}
+    metadata.risks = report.get('findings') if report.get('status') == 'complete' else None
+    session.commit()
+    return metadata
 
 
 def save_insights(session, document_id, expected_fields, *, summary=None, risks=None):

@@ -269,7 +269,8 @@ uv run python -m scripts.benchmark_models \
 | `POST` | `/documents/{document_id}/metadata` | Совместимый маршрут постановки извлечения в очередь, ответ `202`. |
 | `PATCH` | `/documents/{document_id}/metadata` | Сохранить полный объект редактируемых `fields`. |
 | `PATCH` | `/documents/{document_id}/review` | Подтвердить результат оператором или вернуть на проверку. |
-| `POST` | `/documents/{document_id}/insights` | Сформировать заново сводку и риски; ошибки этапов возвращаются в `errors`. |
+| `POST` | `/documents/{document_id}/insights` | Сформировать заново сводку; ошибки возвращаются в `errors`. |
+| `POST` | `/documents/{document_id}/risks` | Проверить поставку или услуги с выбранной стороны; сохранить основания, цитаты и охват проверки. |
 | `GET` | `/documents/{document_id}/content` | Получить подготовленный текст по страницам. |
 | `GET` | `/documents/{document_id}/pages/{page_number}/image` | Получить изображение страницы оригинала. |
 | `GET` | `/documents/{document_id}/preview` | Получить уменьшенное изображение первой страницы для библиотеки. |
@@ -277,6 +278,25 @@ uv run python -m scripts.benchmark_models \
 | `GET` | `/documents/{document_id}/file` | Скачать исходный файл. |
 | `PATCH` | `/documents/{document_id}` | Переместить документ в папку или общий список, передав `folder_id`. |
 | `DELETE` | `/documents/{document_id}` | Удалить документ и связанные данные. |
+
+**Тело запроса `POST /documents/{document_id}/risks`:**
+
+```json
+{
+  "contract_type": "supply",
+  "user_side": "customer",
+  "jurisdiction": "RU",
+  "scope_confirmed": true
+}
+```
+
+`contract_type`: `supply` — поставка, `services` — услуги. `user_side`:
+`customer` — покупатель/заказчик, `provider` — поставщик/исполнитель.
+Профиль предназначен для обычных B2B-договоров по праву РФ. Ответ содержит
+`metadata.risk_review`: статус, параметры, результаты правил, связанные цитаты,
+основания и охват обработки. `complete` означает завершение проверок каталога,
+а не юридическую безопасность договора. При `failed` или `unsupported` список
+новых рисков не публикуется. Правка полей сбрасывает предыдущую проверку.
 
 **Тело запроса `PATCH /documents/{document_id}/review`:**
 

@@ -1,4 +1,4 @@
-"""Evidence grounded contract risk review using the configured analysis API."""
+"""Legacy freeform risk benchmark; the product uses risk_review.py and a profile."""
 
 from __future__ import annotations
 

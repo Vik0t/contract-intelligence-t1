@@ -477,6 +477,7 @@ class MetadataResponse(BaseModel):
         description="AI-generated plain-language summary of the contract"
     )
     risks: Optional[List[Dict[str, Any]]] = None
+    risk_review: Optional[Dict[str, Any]] = None
     created_at: ResponseDateTime = Field(
         ...,
         description="Metadata creation timestamp"
