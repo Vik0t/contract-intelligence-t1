@@ -37,7 +37,7 @@ class JobManager:
             max_workers=max_workers,
             thread_name_prefix="contract-job",
         )
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._futures: dict[int, Future] = {}
         self._timers: set[threading.Timer] = set()
         self._shutdown = False
@@ -64,14 +64,19 @@ class JobManager:
         try:
             database.recover_stale_jobs(
                 db,
-                datetime.now() - self.stale_after,
+                datetime.now(),  # A single API process owns every worker in this deployment.
             )
-            queued_ids = [job.id for job in database.get_queued_jobs(db)]
+            db.commit()
+            queued = [(job.id, job.available_at) for job in db.query(database.ProcessingJob).filter_by(status='queued').all()]
         finally:
             db.close()
 
-        for job_id in queued_ids:
-            self._submit(job_id)
+        for job_id, available_at in queued:
+            delay = (available_at - datetime.now()).total_seconds() if available_at else 0
+            if delay > 0:
+                self._schedule_retry(job_id, delay)
+            else:
+                self._submit(job_id)
 
     def _submit(self, job_id: int) -> None:
         with self._lock:

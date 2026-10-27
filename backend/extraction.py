@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from backend.config import Settings
 from src.document_ir import DocumentIR
 from src.hf_space_extraction import HFSpaceNuExtractBackend
+from src.hf_chat_extraction import extract_fields_with_hf_chat
 from src.local_extraction import extract_contract_key_data, reset_extraction_stats
+from src.extraction.model_loading import unload_model
+from src.extraction.runtime import MODEL_LOCK, external_inference_allowed, keep_models_loaded
+from src.extraction.summary import unload_local_summary_model
+from src.extraction.chat_pipeline import extract_fields_with_api
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractionService:
@@ -39,23 +47,64 @@ class ExtractionService:
     ) -> tuple[dict[str, Any], dict[str, int]]:
         """Extract contract fields using the configured runtime backend."""
         if self.settings.extraction_backend == "local":
-            reset_extraction_stats()
-            return extract_contract_key_data(
-                text=text,
-                document_ir=document_ir,
-                max_new_tokens=max_new_tokens,
-                collect_stats=collect_stats,
-            )
+            with MODEL_LOCK:
+                if not keep_models_loaded():
+                    unload_local_summary_model()
+                reset_extraction_stats()
+                try:
+                    return extract_contract_key_data(
+                        text=text,
+                        document_ir=document_ir,
+                        max_new_tokens=max_new_tokens,
+                        collect_stats=collect_stats,
+                    )
+                finally:
+                    if not keep_models_loaded():
+                        unload_model()
+
+        if self.settings.extraction_backend == "api":
+            if not external_inference_allowed():
+                raise RuntimeError("Внешнее извлечение отключено: ML_ALLOW_EXTERNAL=false")
+            result, usage = extract_fields_with_api(text, document_ir)
+            return result, usage if collect_stats else {key: 0 for key in usage}
 
         if self.settings.extraction_backend == "huggingface-space":
-            result = self._get_hf_space_backend().extract_fields_from_text(
-                text,
-                document_ir,
-                prompt_mode=self.settings.hf_space_prompt_mode,
-                context_mode=self.settings.hf_space_context_mode,
-                context_chars=self.settings.hf_space_context_chars,
-                reasoning=self.settings.hf_space_reasoning,
-            )
+            if not external_inference_allowed():
+                raise RuntimeError("Внешнее извлечение отключено: установите EXTRACTION_BACKEND=local")
+            try:
+                result = self._get_hf_space_backend().extract_fields_from_text(
+                    text,
+                    document_ir,
+                    prompt_mode=self.settings.hf_space_prompt_mode,
+                    context_mode=self.settings.hf_space_context_mode,
+                    context_chars=self.settings.hf_space_context_chars,
+                    reasoning=self.settings.hf_space_reasoning,
+                )
+            except Exception as space_error:
+                if not self.settings.hf_extraction_fallback_enabled:
+                    raise
+                logger.warning(
+                    "NuExtract Space failed (%s); trying Hugging Face chat extraction",
+                    type(space_error).__name__,
+                )
+                try:
+                    fallback_result, fallback_usage = extract_fields_with_hf_chat(
+                        text,
+                        document_ir,
+                        model=self.settings.hf_extraction_fallback_model,
+                        context_chars=self.settings.hf_space_context_chars,
+                    )
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        "NuExtract Space и резервное извлечение Hugging Face недоступны"
+                    ) from fallback_error
+                if not collect_stats:
+                    return fallback_result, {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    }
+                return fallback_result, fallback_usage
             if not collect_stats:
                 return result.result, {
                     "prompt_tokens": 0,

@@ -1,5 +1,33 @@
 # Offline evaluation
 
+Completed comparison: [125-file results, 27 October 2026](RESULTS_2026-10-27.md).
+
+## Full corpus comparison
+
+`scripts.benchmark_dataset` compares local NuExtract3 with the configured DeepCode
+model using identical cached text and DocumentIR. The current corpus has 50 PDF,
+50 DOCX and 25 PNG files; legacy `dataset/meta.json` labels cover 27 contract IDs
+(58 file variants), not the entire corpus. No gold summaries or risk annotations
+are available. Insight checks establish execution/citation grounding, not legal
+accuracy. Reports and caches contain document data and stay under ignored `tmp/`.
+
+```bash
+python -m scripts.benchmark_dataset prepare --output tmp/full-comparison-2026-10-26
+python -m scripts.benchmark_dataset run --backend local --output tmp/full-comparison-2026-10-26
+python -m scripts.benchmark_dataset run --backend api --allow-external-data --insights --workers 2 --output tmp/full-comparison-2026-10-26
+python -m scripts.benchmark_dataset compare --output tmp/full-comparison-2026-10-26
+```
+
+Preparation reads every format, converts DOCX through LibreOffice and performs
+OCR where needed. Exact duplicate model inputs reuse a successful prediction;
+reuse is recorded and excluded from inference timing. API/local runs may execute
+in separate processes after preparation. Use `--resume` after interruption;
+changing extraction/parsing/scoring code requires a fresh prepared run. Do not
+tune model prompts during a comparison. Evaluation counts failed labeled files
+as failures, also reporting accuracy conditional on successful extraction.
+Company names and INNs are matched as pairs. Paired confidence intervals resample
+contract IDs rather than treating format variants as independent documents.
+
 The numbered benchmark scripts currently live under `tests/` for compatibility
 with the existing workflow:
 

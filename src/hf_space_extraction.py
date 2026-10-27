@@ -17,6 +17,7 @@ from typing import Any
 from gradio_client import Client
 
 from src.document_ir import DocumentIR
+from src.extraction.validation import validate_model_result
 from src.local_extraction import (
     CONTRACT_TEMPLATE,
     INSTRUCTIONS,
@@ -297,7 +298,7 @@ class HFSpaceNuExtractBackend:
             parsed = parse_json_output(raw_output)
         except Exception as exc:
             raise ValueError(
-                "NuExtract3 Space returned invalid JSON: " + raw_output[:500]
+                "NuExtract3 Space returned invalid or incomplete JSON"
             ) from exc
         if not isinstance(parsed, dict):
             raise ValueError("NuExtract3 Space returned JSON, but not an object")
@@ -305,6 +306,7 @@ class HFSpaceNuExtractBackend:
         parsed = postprocess_extraction(parsed, text)
         if document_ir is not None:
             parsed = validate_extraction(parsed, document_ir)
+        parsed = validate_model_result(parsed, text)
 
         usage = HFSpaceUsage(
             elapsed_sec=round(elapsed, 3),

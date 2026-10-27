@@ -2,6 +2,7 @@ import logging
 import traceback
 import html
 import io
+from copy import deepcopy
 from datetime import datetime, timedelta
 import mimetypes
 import os
@@ -9,14 +10,16 @@ import shutil
 import tempfile
 import threading
 import bcrypt
+import httpx
 import pymupdf
 from PIL import Image, ImageOps
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, File, Form, HTTPException, Header, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Header, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 import backend.database as database
 import backend.api_requests as api_requests
@@ -24,9 +27,12 @@ from backend.config import get_settings
 from backend.file_validation import UploadValidationError, validate_document_file
 from backend.extraction import ExtractionService
 from backend.jobs import JobManager
+from backend.document_view import ViewUnavailable, locate_evidence, page_count as visual_page_count, render_page, view_pdf_path
 
 from src.local_extraction import extract_text_from_document
 from src.extraction.summary import summarize_document
+from src.extraction.risk_review import RiskProfile, ReviewIncomplete, ScopeNotSupported, review_contract_risks
+from uuid import uuid4
 
 settings = get_settings()
 EXTRACTION_SERVICE = ExtractionService(settings)
@@ -36,16 +42,21 @@ EXTRACTION_SERVICE = ExtractionService(settings)
 async def lifespan(_app):
     """Recover durable jobs on startup and stop workers on shutdown."""
     JOB_MANAGER.recover()
+    with database.get_session(engine) as session:
+        database.recover_risk_reviews(session)
     try:
         yield
     finally:
         JOB_MANAGER.shutdown()
+        from src.extraction.api_models import close_api_clients
+        close_api_clients()
 
 
 app = FastAPI(
     title="T1 Contract Intelligence",
     description="Extracting important info from contracts",
     version="1.1.0",
+    root_path=os.getenv("API_ROOT_PATH", ""),
     lifespan=lifespan,
 )
 
@@ -69,14 +80,26 @@ async def ping():
     return "pong!"
 
 
+@app.get("/health/ready", include_in_schema=False)
+async def readiness():
+    from sqlalchemy import text
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    # Weight and GPU checks run once in scripts.serve before this process starts.
+    return {"status": "ready", "database": "ok", "extraction": settings.extraction_backend}
+
+
 @app.get("/", include_in_schema=False)
-async def service_root():
+async def service_root(request: Request):
     """Small API landing response for direct browser visits."""
     return {
         "service": "T1 Contract Intelligence API",
         "status": "ok",
-        "docs": "/docs",
-        "health": "/ping",
+        "docs": f"{request.scope.get('root_path', '')}/docs",
+        "health": f"{request.scope.get('root_path', '')}/ping",
     }
 
 
@@ -198,8 +221,30 @@ def create_metadata_response(metadata):
         document_id=metadata.document_id,
         fields=metadata.fields,
         summary=getattr(metadata, 'summary', None),
+        risks=getattr(metadata, 'risks', None),
+        risk_review=getattr(metadata, 'risk_review', None),
         created_at=metadata.created_at
     )
+
+
+def insight_error_message(exc: Exception, kind: str) -> str:
+    label = 'сводку' if kind == 'summary' else 'риски'
+    provider = os.getenv('SUMMARY_PROVIDER' if kind == 'summary' else 'RISK_PROVIDER', 'hf').lower()
+    service = 'DeepCode API' if provider == 'deepcode' else 'сервис анализа'
+    if isinstance(exc, database.MetadataChangedError):
+        return 'Поля изменились во время анализа. Обновите сводку и риски для сохранённых данных.'
+    if isinstance(exc, RuntimeError) and 'резервный Hugging Face' in str(exc):
+        return f'Не удалось обновить {label}: основной и резервный сервисы недоступны. Повторите попытку позже.'
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return f'Не удалось обновить {label}: {service} недоступен или не отвечает. Проверьте соединение.'
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in (401, 403):
+            return f'Не удалось обновить {label}: ключ {service} отклонён.'
+        if status == 404:
+            return f'Не удалось обновить {label}: модель или адрес {service} не найдены.'
+        return f'Не удалось обновить {label}: {service} ответил с ошибкой {status}.'
+    return f'Не удалось обновить {label}. Попробуйте ещё раз или обратитесь к администратору.'
 
 
 def readable_document_pages(parsed_document):
@@ -278,7 +323,14 @@ def process_document_parsing(document_id: int):
             with PROCESSING_LOCK:
                 started_at = datetime.now()
                 logger.info(f"Calling extract_text_from_document for {document_id}")
-                parsed_text, document_ir = extract_text_from_document(stored_path)
+                parse_path = stored_path
+                if Path(stored_path).suffix.lower() == '.docx' and os.getenv('DOCX_USE_RENDERED_PAGES', 'false').lower() == 'true':
+                    parse_path = view_pdf_path(stored_path)
+                parsed_text, document_ir = extract_text_from_document(parse_path)
+                if str(parse_path) != str(stored_path):
+                    from src.document_ir import SourceFormat
+                    document_ir.source_format = SourceFormat.DOCX
+                    document_ir.source_path = str(stored_path)
                 parsing_time = (datetime.now() - started_at).total_seconds()
                 logger.info(f"Document {document_id} parsed successfully in {parsing_time:.2f}s. Text length: {len(parsed_text)}")
 
@@ -385,15 +437,25 @@ def process_metadata_extraction(document_id: int):
             )
             logger.info(f"Metadata saved for document {document_id}")
 
+            database.update_document(
+                db,
+                document_id,
+                processing_status='extracted',
+                processing_error=None,
+                review_status='pending',
+                reviewed_at=None,
+                reviewed_by=None,
+            )
+
             # Суммаризация — отдельный, не критичный для основного статуса шаг.
             # Если HF API недоступен/лимитирован, документ всё равно должен
             # остаться в статусе 'extracted' с полями, просто без summary.
             try:
                 summary_text = summarize_document(parsed_doc.text, extracted_data)
-                database.update_metadata(
+                database.save_insights(
                     db,
                     document_id=document_id,
-                    fields=extracted_data,
+                    expected_fields=extracted_data,
                     summary=summary_text
                 )
                 logger.info(f"Summary saved for document {document_id}")
@@ -401,6 +463,8 @@ def process_metadata_extraction(document_id: int):
                 logger.warning(
                     f"Summary generation failed for document {document_id}: {summary_exc}"
                 )
+            # A risk review needs the operator's explicit side and scope.
+            # Do not guess a perspective or publish generic risks in the background.
 
             existing_stats = database.get_stats(db, document_id=document_id)
             if existing_stats:
@@ -415,15 +479,6 @@ def process_metadata_extraction(document_id: int):
                 )
                 logger.info(f"Stats updated for document {document_id}")
 
-            database.update_document(
-                db,
-                document_id,
-                processing_status='extracted',
-                processing_error=None,
-                review_status='pending',
-                reviewed_at=None,
-                reviewed_by=None,
-            )
             logger.info(f"Document {document_id} status updated to 'extracted'")
         except Exception as e:
             logger.error(f"Error extracting metadata for document {document_id}: {str(e)}")
@@ -978,6 +1033,8 @@ async def delete_document(
         stored_path = document.stored_path
         database.delete_document(db, document.id)
         try_remove_file(stored_path)
+        if stored_path and Path(stored_path).suffix.lower() == '.docx':
+            try_remove_file(str(Path(stored_path).with_name(Path(stored_path).name + '.rendered.pdf')))
         
         return api_requests.DocumentDeleteResponse(
             success=True,
@@ -1057,24 +1114,12 @@ async def update_document_metadata(
             fields=metadata_data.fields
         )
 
-        # Поля отредактированы вручную — пересобираем summary, чтобы он не
-        # расходился с тем, что реально сохранено. Тот же принцип, что и при
-        # первичном извлечении: сбой суммаризации не должен блокировать
-        # сохранение отредактированных полей.
-        try:
-            parsed_doc = database.get_parsed_document(db, document.id)
-            summary_text = summarize_document(
-                parsed_doc.text if parsed_doc else "",
-                metadata_data.fields
-            )
-            metadata = database.update_metadata(
-                db,
-                document_id=document.id,
-                fields=metadata_data.fields,
-                summary=summary_text
-            )
-        except Exception as summary_exc:
-            logger.warning(f"Summary refresh failed for document {document.id}: {summary_exc}")
+        # Previously generated conclusions may contradict the operator's edits.
+        # Saving fields must remain immediate even when the analysis API is down.
+        metadata.summary = None
+        metadata.risks = None
+        metadata.risk_review = None
+        db.commit()
 
         database.update_document(
             db,
@@ -1423,6 +1468,7 @@ async def update_document(
 @app.get(
     "/documents/{document_id}/content",
     response_model=api_requests.DocumentContentResponse,
+    response_model_exclude_none=True,
     summary="Read parsed document content",
     description="Return document text grouped by page for source verification",
 )
@@ -1441,11 +1487,130 @@ async def get_document_content(document_id: int, authorization: str = Header(...
         if not parsed_document:
             raise HTTPException(status_code=409, detail="Document is still being prepared")
         pages, source_format = readable_document_pages(parsed_document)
+        visual_count = None
+        visual_error = None
+        if document.stored_path and Path(document.stored_path).is_file() and source_format in {'pdf', 'docx', 'image'}:
+            try:
+                visual_count = visual_page_count(document.stored_path)
+            except (ViewUnavailable, OSError, ValueError) as exc:
+                logger.warning("Visual preview unavailable for document %s: %s", document_id, exc)
+                visual_error = str(exc)
         return api_requests.DocumentContentResponse(
             source_format=source_format,
             page_count=len(pages),
             pages=pages,
+            visual_page_count=visual_count,
+            visual_error=visual_error,
         )
+    finally:
+        db.close()
+
+
+@app.get('/documents/{document_id}/pages/{page_number}/image', summary='Render original document page')
+async def get_document_page_image(document_id: int, page_number: int, authorization: str = Header(...)):
+    if not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Invalid authentication scheme')
+    user, db = get_user_from_token(authorization.removeprefix('Bearer '))
+    try:
+        document = database.get_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail='Document not found')
+        verify_document_ownership(user, document)
+        if not document.stored_path or not Path(document.stored_path).is_file():
+            raise HTTPException(status_code=404, detail='Original file is not available')
+        try:
+            image = render_page(document.stored_path, page_number)
+        except IndexError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ViewUnavailable, OSError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return Response(content=image, media_type='image/png', headers={'Cache-Control': 'private, max-age=3600'})
+    finally:
+        db.close()
+
+
+@app.post('/documents/{document_id}/source-location', summary='Locate evidence on original pages')
+async def get_source_location(document_id: int, body: api_requests.SourceLocationRequest, authorization: str = Header(...)):
+    if not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Invalid authentication scheme')
+    user, db = get_user_from_token(authorization.removeprefix('Bearer '))
+    try:
+        document = database.get_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail='Document not found')
+        verify_document_ownership(user, document)
+        if not document.stored_path or not Path(document.stored_path).is_file():
+            raise HTTPException(status_code=404, detail='Original file is not available')
+        try:
+            parsed = database.get_parsed_document(db, document_id)
+            location = locate_evidence(document.stored_path, body.evidence, body.page, document_ir=parsed.document_ir if parsed else None)
+        except (ViewUnavailable, OSError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not location:
+            raise HTTPException(status_code=404, detail='Фрагмент не найден в оформленном документе')
+        return location
+    finally:
+        db.close()
+
+
+@app.post('/documents/{document_id}/insights', summary='Generate summary')
+async def refresh_document_insights(document_id: int, authorization: str = Header(...)):
+    if not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Invalid authentication scheme')
+    user, db = get_user_from_token(authorization.removeprefix('Bearer '))
+    try:
+        document = database.get_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail='Document not found')
+        verify_document_ownership(user, document)
+        parsed = database.get_parsed_document(db, document_id)
+        metadata = database.get_metadata(db, document_id)
+        if not parsed or not metadata:
+            raise HTTPException(status_code=409, detail='Сначала извлеките поля договора')
+        analysis_fields = deepcopy(metadata.fields)
+        errors = []
+        try:
+            summary_text = await run_in_threadpool(summarize_document, parsed.text, analysis_fields)
+            metadata = database.save_insights(db, document_id, analysis_fields, summary=summary_text)
+        except Exception as exc:
+            logger.warning('Summary refresh failed for document %s: %s', document_id, exc)
+            errors.append(insight_error_message(exc, 'summary'))
+        return {'metadata': create_metadata_response(metadata), 'errors': errors}
+    finally:
+        db.close()
+
+
+@app.post('/documents/{document_id}/risks', summary='Review supply or services contract from the selected side')
+async def review_document_risks(document_id: int, profile: RiskProfile, authorization: str = Header(...)):
+    if not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Invalid authentication scheme')
+    user, db = get_user_from_token(authorization.removeprefix('Bearer '))
+    try:
+        document = database.get_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail='Document not found')
+        verify_document_ownership(user, document)
+        parsed = database.get_parsed_document(db, document_id)
+        metadata = database.get_metadata(db, document_id)
+        if not parsed or not metadata:
+            raise HTTPException(status_code=409, detail='Сначала извлеките поля договора')
+        analysis_fields = deepcopy(metadata.fields)
+        review_id = uuid4().hex
+        pending = {'status': 'running', 'profile': profile.model_dump(), 'review_id': review_id}
+        database.start_risk_review(db, document_id, analysis_fields, pending)
+        try:
+            report = await run_in_threadpool(review_contract_risks, parsed.text, analysis_fields, profile)
+            metadata = database.finish_risk_review(db, document_id, analysis_fields, review_id, report)
+        except database.MetadataChangedError:
+            raise
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, (ScopeNotSupported, ReviewIncomplete)) else 'Не удалось полностью проверить договор. Повторите проверку; частичный результат не опубликован.'
+            status = 'unsupported' if isinstance(exc, ScopeNotSupported) else 'failed'
+            metadata = database.finish_risk_review(db, document_id, analysis_fields, review_id, {**pending, 'status': status, 'error': message})
+            logger.warning('Catalog risk review failed for document %s (%s)', document_id, type(exc).__name__)
+        return {'metadata': create_metadata_response(metadata)}
+    except database.MetadataChangedError as exc:
+        raise HTTPException(status_code=409, detail='Данные или сторона проверки изменились. Откройте актуальный документ и повторите проверку.') from exc
     finally:
         db.close()
 

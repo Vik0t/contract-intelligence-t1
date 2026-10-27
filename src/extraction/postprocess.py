@@ -219,6 +219,10 @@ def _normalize_contract_type(result: dict[str, Any], text: str) -> None:
     if not isinstance(item, dict):
         return
 
+    from src.extraction.schema import CONTRACT_TYPE_LABELS
+    if item.get("value") in CONTRACT_TYPE_LABELS:
+        return
+
     context = " ".join(
         str(value)
         for value in (item.get("value"), item.get("evidence"), text[:6000])
@@ -343,6 +347,16 @@ def _normalize_term(result: dict[str, Any], text: str) -> None:
         )
         for candidate in candidates
     ]
+    scored_candidates = [
+        (score, candidate) for score, candidate in scored_candidates
+        if _term_candidate_score(candidate, _term_context(text, candidate), set(), None) >= 7
+    ]
+    if not scored_candidates:
+        item["value"] = None
+        item["semantic_type"] = None
+        item["evidence"] = None
+        item["page_number"] = None
+        return
     score, selected = max(scored_candidates, key=lambda pair: (pair[0], pair[1]["start"]))
     if score <= 0 and predicted_dates:
         selected = next(

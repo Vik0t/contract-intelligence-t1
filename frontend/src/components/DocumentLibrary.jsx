@@ -3,7 +3,7 @@ import { fileExtension, formatDate } from '../contractFields.js';
 import DocumentPreview from './DocumentPreview.jsx';
 
 function documentStatus(document) {
-  if (document.has_metadata && document.review_status === 'reviewed') return { label: 'Проверено', tone: 'ready' };
+  if (document.has_metadata && document.review_status === 'reviewed') return { label: 'Поля проверены', tone: 'ready' };
   if (document.has_metadata) return { label: 'Нужно проверить', tone: 'attention' };
   if (document.status === 'processing') return { label: 'Анализируем документ…', tone: 'processing' };
   if (document.status === 'failed') return { label: 'Требует внимания', tone: 'attention' };
@@ -111,8 +111,8 @@ export default function DocumentLibrary({
             {uploading ? 'Загружаем…' : '+ Загрузить договор'}
           </button>
         </div>
-        <input ref={inputRef} className="visually-hidden" type="file" accept=".pdf,.docx,.jpg,.jpeg,.png,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
-        <input ref={cameraInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
+        <input ref={inputRef} className="visually-hidden" tabIndex={-1} aria-hidden="true" type="file" accept=".pdf,.docx,.jpg,.jpeg,.png,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
+        <input ref={cameraInputRef} className="visually-hidden" tabIndex={-1} aria-hidden="true" type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { acceptFile(event.target.files?.[0]); event.target.value = ''; }} />
       </header>
 
       <div

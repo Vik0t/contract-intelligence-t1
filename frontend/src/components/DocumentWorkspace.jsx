@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { authHeaders, request, requestBlob } from '../api.js';
+import RiskReviewPanel from './RiskReviewPanel.jsx';
 import {
   cloneFields,
   FIELD_ORDER,
@@ -53,7 +54,7 @@ function PartiesValue({ parties, onSelectSource }) {
   );
 }
 
-function FieldRow({ fieldKey, field, active, onSelectSource, onCopy }) {
+function FieldRow({ fieldKey, field, active, reviewed, onSelectSource, onCopy }) {
   const evidence = getFieldEvidence(fieldKey, field);
   const page = getFieldPage(fieldKey, field);
   const needsReview = fieldNeedsReview(fieldKey, field);
@@ -62,7 +63,7 @@ function FieldRow({ fieldKey, field, active, onSelectSource, onCopy }) {
     <section className={`field-row${active ? ' is-active' : ''}`}>
       <div className="field-row-heading">
         <span>{fieldLabels[fieldKey] ?? fieldKey.replaceAll('_', ' ')}</span>
-        {needsReview ? <strong className="review-flag">Стоит проверить</strong> : <strong className="verified-flag">Источник найден</strong>}
+        {needsReview && !reviewed ? <strong className="review-flag">Стоит проверить</strong> : <strong className="verified-flag">{needsReview ? 'Проверено оператором' : 'Источник найден'}</strong>}
       </div>
       <div className="field-row-value">
         {fieldKey === 'parties' ? <PartiesValue parties={value} onSelectSource={(source) => onSelectSource({ ...source, fieldKey })} /> : <span className={value === null || value === undefined || value === '' ? 'missing-value' : ''}>{formatFieldValue(fieldKey, field)}</span>}
@@ -84,6 +85,13 @@ function MetadataEditor({ fields, onChange }) {
     const structured = isStructuredField(next.parties);
     const parties = structured ? [...(next.parties.value ?? [])] : [...(next.parties ?? [])];
     parties[index] = { ...(parties[index] ?? {}), [name]: value };
+    if (name === 'inn') {
+      parties[index].inn_evidence = null;
+      parties[index].inn_page_number = null;
+    } else {
+      parties[index].name_evidence = null;
+      parties[index].name_page_number = null;
+    }
     if (structured) next.parties.value = parties;
     else next.parties = parties;
     onChange(next);
@@ -126,6 +134,43 @@ function MetadataEditor({ fields, onChange }) {
             </fieldset>
           );
         }
+        if (key === 'total_amount' && isStructuredField(field)) {
+          return (
+            <fieldset className="editor-fieldset" key={key}>
+              <legend>Общая сумма</legend>
+              <label className="editor-field">Сумма<input inputMode="decimal" value={field.value ?? ''} onChange={(event) => onChange(updateFieldValue(fields, key, event.target.value))} /></label>
+              <label className="editor-field">Валюта<input value={field.currency ?? ''} maxLength={3} placeholder="RUB" list="contract-currencies" onChange={(event) => {
+                const next = cloneFields(fields);
+                next.total_amount = { ...next.total_amount, currency: event.target.value.toUpperCase(), evidence: null, page_number: null };
+                onChange(next);
+              }} /></label>
+              <datalist id="contract-currencies"><option value="RUB">Рубли</option><option value="USD">Доллары США</option><option value="EUR">Евро</option><option value="CNY">Юани</option><option value="KZT">Тенге</option><option value="BYN">Белорусские рубли</option></datalist>
+              <span className="field-hint">Код из трёх букв: RUB — рубли, USD — доллары, EUR — евро.</span>
+            </fieldset>
+          );
+        }
+        if (key === 'vat' && isStructuredField(field)) {
+          const updateVat = (name, value) => {
+            const next = cloneFields(fields);
+            next.vat = { ...next.vat, [name]: value, evidence: null, page_number: null, raw_value: null };
+            if (name === 'mode' && value === 'not_subject') next.vat.rate = null;
+            onChange(next);
+          };
+          return (
+            <fieldset className="editor-fieldset" key={key}>
+              <legend>НДС</legend>
+              <label className="editor-field">Условие
+                <select value={field.mode ?? 'not_stated'} onChange={(event) => updateVat('mode', event.target.value)}>
+                  <option value="included">Включён в сумму</option>
+                  <option value="excluded">Начисляется сверх суммы</option>
+                  <option value="not_subject">Не облагается</option>
+                  <option value="not_stated">Не указан</option>
+                </select>
+              </label>
+              <label className="editor-field">Ставка, %<input inputMode="decimal" value={field.rate ?? ''} disabled={field.mode === 'not_subject'} onChange={(event) => updateVat('rate', event.target.value)} /></label>
+            </fieldset>
+          );
+        }
         const value = fieldValueForEdit(key, field);
         const simple = typeof value !== 'object' || value === null;
         return (
@@ -148,7 +193,7 @@ function highlightEvidence(text, evidence) {
   if (!evidence) return text;
   const index = text.toLocaleLowerCase('ru').indexOf(evidence.toLocaleLowerCase('ru'));
   if (index < 0) return text;
-  return <>{text.slice(0, index)}<mark>{text.slice(index, index + evidence.length)}</mark>{text.slice(index + evidence.length)}</>;
+  return <>{text.slice(0, index)}<mark data-evidence="true">{text.slice(index, index + evidence.length)}</mark>{text.slice(index + evidence.length)}</>;
 }
 
 function DocumentPhoto({ document, token }) {
@@ -175,15 +220,95 @@ function DocumentPhoto({ document, token }) {
   return <img className="document-photo" src={imageUrl} alt={`Фотография документа ${document.filename || ''}`} />;
 }
 
-function DocumentPages({ content, document, loading, selectedSource, token }) {
+function RenderedPage({ documentId, number, token, location, onPageRef }) {
+  const pageRef = useRef(null);
+  const markRef = useRef(null);
+  const [visible, setVisible] = useState(false);
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '800px' });
+    if (pageRef.current) observer.observe(pageRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    const controller = new AbortController();
+    let url = '';
+    requestBlob(`/documents/${documentId}/pages/${number}/image`, token, controller.signal)
+      .then((blob) => {
+        url = URL.createObjectURL(blob);
+        setImageUrl(url);
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [documentId, number, token, visible]);
+
+  useEffect(() => {
+    if (!location || !imageLoaded || !markRef.current) return;
+    const frame = requestAnimationFrame(() => markRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' }));
+    return () => cancelAnimationFrame(frame);
+  }, [imageLoaded, location]);
+
+  return (
+    <article className="document-page rendered-page" ref={(node) => { pageRef.current = node; onPageRef(number, node); }}>
+      <div className="page-number">Страница {number}</div>
+      <div className="rendered-page-canvas">
+        {imageUrl ? <img src={imageUrl} onLoad={() => setImageLoaded(true)} alt={`Страница ${number} исходного документа`} /> : <div className="rendered-page-placeholder">{failed ? 'Не удалось показать страницу' : 'Открываем страницу…'}</div>}
+        {imageUrl && location?.rects?.map((rect, index) => (
+          <mark
+            key={index}
+            ref={index === 0 ? markRef : undefined}
+            className="source-highlight"
+            style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}
+            aria-label={index === 0 ? 'Найденный фрагмент' : undefined}
+          />
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function DocumentPages({ content, document, loading, selectedSource, location, token }) {
   const pageRefs = useRef(new Map());
   useEffect(() => {
-    if (!selectedSource?.page) return;
-    pageRefs.current.get(Number(selectedSource.page))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [selectedSource]);
+    if (location?.page) {
+      pageRefs.current.get(location.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!selectedSource || content?.visual_page_count) return;
+    const page = pageRefs.current.get(Number(selectedSource.page) || 1);
+    if (!page) return;
+    if (content?.source_format === 'image') page.querySelector('.photo-transcript')?.setAttribute('open', '');
+    requestAnimationFrame(() => {
+      (page.querySelector('[data-evidence]') || page).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, [selectedSource, content, location]);
 
   if (loading) return <div className="document-loading">Открываем текст документа…</div>;
   if (!content?.pages?.length) return <div className="document-loading">Текст для просмотра недоступен. Откройте оригинал документа.</div>;
+  if (content.visual_page_count) {
+    return (
+      <div className="document-pages visual-document-pages">
+        {Array.from({ length: content.visual_page_count }, (_, index) => (
+          <RenderedPage key={index + 1} documentId={document.id} number={index + 1} token={token} location={location?.page === index + 1 ? location : null} onPageRef={(number, node) => { if (node) pageRefs.current.set(number, node); else pageRefs.current.delete(number); }} />
+        ))}
+      </div>
+    );
+  }
   if (content.source_format === 'image') {
     const page = content.pages[0];
     return (
@@ -229,29 +354,12 @@ function buildSummary(fields) {
   };
 }
 
-function deriveRisks(fields) {
-  const risks = [];
-  const add = (title, body, fieldKey) => {
-    const field = fields[fieldKey];
-    risks.push({ title, body, evidence: getFieldEvidence(fieldKey, field), page: getFieldPage(fieldKey, field) });
-  };
-  if (!getFieldValue('term', fields.term)) add('Срок действия не найден', 'Проверьте, определён ли момент окончания обязательств сторон.', 'term');
-  const termText = `${fields.term?.raw_value ?? ''} ${fields.term?.evidence ?? ''}`;
-  if (/до полного исполнения/i.test(termText)) add('Открытая формулировка срока', 'Договор действует до полного исполнения обязательств. Стоит проверить, достаточно ли чётко определён момент завершения.', 'term');
-  if (!getFieldValue('total_amount', fields.total_amount)) add('Не найден предел суммы', 'Проверьте цену договора, лимит обязательств и порядок её изменения.', 'total_amount');
-  const vatText = `${fields.vat?.raw_value ?? ''} ${fields.vat?.evidence ?? ''}`;
-  if (fields.vat?.mode === 'not_stated' || /при наличии|если применим/i.test(vatText)) add('Условия НДС неоднозначны', 'Из найденной формулировки нельзя уверенно определить, включён ли НДС в сумму.', 'vat');
-  const parties = getFieldValue('parties', fields.parties);
-  if (!Array.isArray(parties) || parties.length < 2) add('Не все стороны определены', 'Проверьте преамбулу и раздел с реквизитами.', 'parties');
-  else if (parties.some((party) => !party.inn)) risks.push({ title: 'Не у всех сторон найден ИНН', body: 'Проверьте реквизиты контрагентов.', evidence: partyEvidence(parties.find((party) => !party.inn)), page: partyPage(parties.find((party) => !party.inn)) });
-  return risks;
-}
-
-function SummaryPanel({ fields, summary }) {
+function SummaryPanel({ fields, summary, onRefresh, refreshing, insightError }) {
   const derived = buildSummary(fields);
   return (
     <div className="summary-panel">
-      <p className="panel-kicker">Краткая сводка</p>
+      <div className="insights-heading"><p className="panel-kicker">Краткая сводка</p><button type="button" className="source-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Анализируем…' : summary ? 'Обновить сводку' : 'Создать сводку'}</button></div>
+      {insightError ? <p className="insights-error" role="alert">{insightError}</p> : null}
       {summary ? (
         <p className="summary-ai-text">{summary}</p>
       ) : (
@@ -265,26 +373,13 @@ function SummaryPanel({ fields, summary }) {
   );
 }
 
-function RisksPanel({ fields, onSelectSource }) {
-  const risks = deriveRisks(fields);
-  return (
-    <div className="risks-panel">
-      <div className="risk-disclaimer">Предварительная проверка по извлечённым данным. Не заменяет юридическую экспертизу.</div>
-      {risks.length ? risks.map((risk) => (
-        <section className="risk-row" key={risk.title}>
-          <span className="risk-level">Проверить</span>
-          <h3>{risk.title}</h3>
-          <p>{risk.body}</p>
-          <SourceButton evidence={risk.evidence} page={risk.page} onSelect={onSelectSource} />
-        </section>
-      )) : <div className="empty-panel"><strong>По доступным полям явных сигналов нет</strong><span>Для полноценного анализа рисков потребуется проверка всех пунктов договора.</span></div>}
-    </div>
-  );
-}
-
-export default function DocumentWorkspace({ document, token, error, onBack, onOpenFile, onAnalyze, onSaveMetadata, onReview }) {
+export default function DocumentWorkspace({ document, token, error, onBack, onOpenFile, onAnalyze, onSaveMetadata, onReview, onRefreshInsights, onReviewRisks }) {
   const [activeTab, setActiveTab] = useState('fields');
   const [selectedSource, setSelectedSource] = useState(null);
+  const [sourceLocation, setSourceLocation] = useState(null);
+  const [sourceError, setSourceError] = useState('');
+  const [refreshingInsights, setRefreshingInsights] = useState(false);
+  const [insightError, setInsightError] = useState('');
   const [content, setContent] = useState(null);
   const [contentLoading, setContentLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -294,13 +389,12 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
   const [notice, setNotice] = useState('');
   const noticeTimeoutRef = useRef(null);
   const fields = document.metadata?.fields ?? {};
-  const reviewCount = useMemo(() => orderedEntries(fields).filter(([key, field]) => fieldNeedsReview(key, field)).length, [fields]);
-  const riskCount = useMemo(() => deriveRisks(fields).length, [fields]);
+  const reviewCount = useMemo(() => document.review_status === 'reviewed' ? 0 : orderedEntries(fields).filter(([key, field]) => fieldNeedsReview(key, field)).length, [fields, document.review_status]);
+  const riskCount = document.metadata?.risk_review?.status === 'complete' ? document.metadata.risk_review.findings.length : 0;
 
   useEffect(() => {
     setEditing(false);
-    setDraftFields(cloneFields(document.metadata?.fields));
-  }, [document.id, document.metadata]);
+  }, [document.id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -311,6 +405,22 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
       .finally(() => { if (!controller.signal.aborted) setContentLoading(false); });
     return () => controller.abort();
   }, [document.has_metadata, document.id, document.status, token]);
+
+  useEffect(() => {
+    setSourceLocation(null);
+    setSourceError('');
+    if (!selectedSource?.evidence || !content?.visual_page_count) return undefined;
+    const controller = new AbortController();
+    request(`/documents/${document.id}/source-location`, {
+      method: 'POST', headers: authHeaders(token), signal: controller.signal,
+      body: JSON.stringify({ evidence: selectedSource.evidence, page: selectedSource.page || null }),
+    })
+      .then(setSourceLocation)
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') setSourceError('Цитату не удалось точно найти на странице. Проверьте исходный документ вручную.');
+      });
+    return () => controller.abort();
+  }, [selectedSource, content, document.id, token]);
 
   useEffect(() => () => {
     if (noticeTimeoutRef.current) window.clearTimeout(noticeTimeoutRef.current);
@@ -371,12 +481,26 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
     }
   };
 
+  const refreshInsights = async () => {
+    setRefreshingInsights(true);
+    setInsightError('');
+    try {
+      const result = await onRefreshInsights(document);
+      if (result.errors?.length) setInsightError(result.errors.join(' '));
+      else showNotice('Сводка обновлена');
+    } catch {
+      setInsightError('Не удалось обновить анализ. Повторите попытку позже.');
+    } finally {
+      setRefreshingInsights(false);
+    }
+  };
+
   const hasMetadata = document.has_metadata && document.metadata?.fields;
   const canStartAnalysis = document.status === 'ready' || document.status === 'failed';
   return (
     <section className="workspace-shell">
       <header className="workspace-header">
-        <button className="back-button" type="button" onClick={onBack}><span aria-hidden="true">←</span> К списку договоров</button>
+        <button className="back-button" type="button" onClick={() => { if (!editing || window.confirm('Есть несохранённые изменения. Вернуться к списку без сохранения?')) onBack(); }}><span aria-hidden="true">←</span> К списку договоров</button>
         <div className="workspace-titlebar">
           <div className="workspace-title">
             <p className="eyebrow">Проверка договора</p>
@@ -387,9 +511,9 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
             {hasMetadata && !editing ? <button className="secondary-button" type="button" onClick={copyAll}>Копировать всё</button> : null}
             {hasMetadata && !editing ? <button className="secondary-button" type="button" onClick={exportJson}>Скачать JSON</button> : null}
             {document.has_file ? <button className="secondary-button" type="button" onClick={() => onOpenFile(document)}>Открыть оригинал</button> : null}
-            {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" onClick={() => { setActiveTab('fields'); setEditing(true); }}>Редактировать</button> : null}
-            {hasMetadata && !editing && document.review_status !== 'reviewed' ? <button className="primary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить проверку'}</button> : null}
-            {hasMetadata && !editing && document.review_status === 'reviewed' ? <button className="secondary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(false)}>Вернуть на проверку</button> : null}
+            {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" onClick={() => { setDraftFields(cloneFields(fields)); setActiveTab('fields'); setEditing(true); }}>Редактировать</button> : null}
+            {hasMetadata && !editing && document.review_status !== 'reviewed' ? <button className="primary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить поля'}</button> : null}
+            {hasMetadata && !editing && document.review_status === 'reviewed' ? <button className="secondary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(false)}>Вернуть поля на проверку</button> : null}
             {editing ? <button className="secondary-button" type="button" onClick={() => { setEditing(false); setDraftFields(cloneFields(fields)); }}>Отменить</button> : null}
             {editing ? <button className="primary-button compact-button" type="button" disabled={saving} onClick={saveMetadata}>{saving ? 'Сохраняем…' : 'Сохранить'}</button> : null}
           </div>
@@ -401,7 +525,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
       {hasMetadata ? (
         <div className={`review-state${document.review_status === 'reviewed' ? ' is-reviewed' : ''}`}>
           <span aria-hidden="true" />
-          <strong>{document.review_status === 'reviewed' ? 'Проверено оператором' : 'Ожидает проверки оператора'}</strong>
+          <strong>{document.review_status === 'reviewed' ? 'Поля проверены оператором' : 'Поля ожидают проверки оператора'}</strong>
           {document.review_status === 'reviewed' && document.reviewed_at ? <time dateTime={document.reviewed_at}>{new Date(document.reviewed_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })}</time> : <small>Проверьте сомнительные значения и подтвердите результат.</small>}
         </div>
       ) : null}
@@ -417,20 +541,22 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
         <div className="workspace-grid">
           <aside className="review-panel">
             <nav className="workspace-tabs" aria-label="Разделы анализа">
-              <button type="button" className={activeTab === 'fields' ? 'is-active' : ''} onClick={() => setActiveTab('fields')}>Поля{reviewCount ? <span>{reviewCount} проверить</span> : null}</button>
-              <button type="button" className={activeTab === 'summary' ? 'is-active' : ''} onClick={() => setActiveTab('summary')}>Кратко</button>
-              <button type="button" className={activeTab === 'risks' ? 'is-active' : ''} onClick={() => setActiveTab('risks')}>Риски{riskCount ? <span>{riskCount}</span> : null}</button>
+              <button type="button" aria-pressed={activeTab === 'fields'} className={activeTab === 'fields' ? 'is-active' : ''} onClick={() => setActiveTab('fields')}>Поля{reviewCount ? <span>{reviewCount} проверить</span> : null}</button>
+              <button type="button" aria-pressed={activeTab === 'summary'} className={activeTab === 'summary' ? 'is-active' : ''} onClick={() => setActiveTab('summary')}>Кратко</button>
+              <button type="button" aria-pressed={activeTab === 'risks'} className={activeTab === 'risks' ? 'is-active' : ''} onClick={() => setActiveTab('risks')}>Риски{riskCount ? <span>{riskCount}</span> : null}</button>
             </nav>
             <div className="review-content">
               {editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : null}
-              {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
-              {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} /> : null}
-              {!editing && activeTab === 'risks' ? <RisksPanel fields={fields} onSelectSource={setSelectedSource} /> : null}
+              {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} reviewed={document.review_status === 'reviewed'} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
+              {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
+              {!editing && activeTab === 'risks' ? <RiskReviewPanel key={document.id} fields={fields} review={document.metadata?.risk_review} legacyRisks={document.metadata?.risks} onSelectSource={setSelectedSource} onRun={(profile) => onReviewRisks(document, profile)} /> : null}
             </div>
           </aside>
           <section className="document-panel" aria-label="Текст договора">
-            <div className="document-panel-heading"><strong>Документ</strong><span>{content?.page_count ? `${content.page_count} стр.` : ''}</span></div>
-            <DocumentPages content={content} document={document} loading={contentLoading} selectedSource={selectedSource} token={token} />
+            <div className="document-panel-heading"><strong>Документ</strong><span>{content?.visual_page_count || content?.page_count ? `${content.visual_page_count || content.page_count} стр.` : ''}</span></div>
+            {sourceError ? <p className="source-location-error" role="status">{sourceError}</p> : null}
+            {content?.visual_error ? <p className="source-location-error" role="status">{content.visual_error}. Показан извлечённый текст.</p> : null}
+            <DocumentPages content={content} document={document} loading={contentLoading} selectedSource={selectedSource} location={sourceLocation} token={token} />
           </section>
         </div>
       )}

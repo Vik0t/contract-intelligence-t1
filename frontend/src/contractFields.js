@@ -46,10 +46,35 @@ export function updateFieldValue(fields, key, value) {
     } else {
       current.value = value;
     }
+    current.evidence = null;
+    current.page_number = null;
   } else {
     next[key] = value;
   }
   return next;
+}
+
+export function fieldsForSave(fields) {
+  const result = cloneFields(fields);
+  const number = (value, label) => {
+    if (value === '' || value === null || value === undefined) return null;
+    const normalized = String(value).replace(/\s/g, '').replace(',', '.');
+    if (!/^-?\d+(?:\.\d+)?$/.test(normalized) || !Number.isFinite(Number(normalized))) {
+      throw new Error(`${label}: введите число, например 100 000,50.`);
+    }
+    return Number(normalized);
+  };
+  if (isStructuredField(result.total_amount)) {
+    result.total_amount.value = number(result.total_amount.value, 'Сумма');
+    const currency = (result.total_amount.currency ?? '').trim().toUpperCase();
+    if (currency && !/^[A-Z]{3}$/.test(currency)) throw new Error('Укажите код валюты из трёх букв, например RUB.');
+    result.total_amount.currency = currency || null;
+  }
+  if (isStructuredField(result.vat)) {
+    result.vat.rate = number(result.vat.rate, 'Ставка НДС');
+    if (result.vat.rate !== null && (result.vat.rate < 0 || result.vat.rate > 100)) throw new Error('Ставка НДС должна быть от 0 до 100%.');
+  }
+  return result;
 }
 
 export function getFieldValue(key, field) {
@@ -61,7 +86,14 @@ export function getFieldValue(key, field) {
   if (key === 'contract_date') return field.value ?? field.raw_value;
   if (key === 'term') return field.value ?? field.raw_value;
   if (key === 'total_amount') return field.value ?? field.raw_value;
-  if (key === 'vat') return field.raw_value ?? field.rate;
+  if (key === 'vat') {
+    if (field.raw_value) return field.raw_value;
+    if (field.mode === 'not_subject') return 'Не облагается НДС';
+    const rate = field.rate === null || field.rate === undefined || field.rate === '' ? '' : ` ${field.rate}%`;
+    if (field.mode === 'included') return `НДС включён${rate}`;
+    if (field.mode === 'excluded') return `НДС сверх суммы${rate}`;
+    return field.rate === null || field.rate === undefined ? null : `${field.rate}%`;
+  }
   return field.value ?? field.raw_value ?? field.name;
 }
 
@@ -113,6 +145,7 @@ export function fieldNeedsReview(key, field) {
   }
   if (value === null || value === undefined || value === '') return true;
   if (!getFieldEvidence(key, field)) return true;
+  if (key === 'total_amount' && isStructuredField(field) && !field.currency) return true;
   if (key === 'vat' && isStructuredField(field)) {
     return field.mode === 'not_stated' || /при наличии|если применим/i.test(field.raw_value ?? '');
   }
@@ -138,6 +171,7 @@ export function fieldsToPlainObject(fields) {
   const result = {};
   for (const key of FIELD_ORDER) {
     if (Object.hasOwn(fields ?? {}, key)) result[fieldLabels[key] ?? key] = getFieldValue(key, fields[key]);
+    if (key === 'total_amount' && isStructuredField(fields?.[key])) result['Валюта'] = fields[key].currency ?? null;
   }
   return result;
 }

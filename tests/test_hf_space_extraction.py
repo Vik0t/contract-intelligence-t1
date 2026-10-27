@@ -13,7 +13,7 @@ class FakeClient:
         self.calls.append((args, kwargs))
         return (
             "",
-            "{'value': '```json\\n{\\\"contract_type\\\": {\\\"value\\\": \\\"Договор поставки\\\"}}\\n```', '__type__': 'update'}",
+            {"value": '```json\n{"contract_type": {"value": "Договор поставки", "evidence": "Договор поставки"}}\n```', "__type__": "update"},
             "done",
         )
 

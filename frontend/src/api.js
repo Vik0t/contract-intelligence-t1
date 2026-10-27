@@ -22,9 +22,14 @@ export async function request(path, options = {}) {
   });
   const data = await parseResponse(response);
   if (!response.ok) {
-    const message = typeof data === 'object'
+    let message = data && typeof data === 'object'
       ? data.detail || data.message || 'Не удалось выполнить запрос'
       : data || 'Не удалось выполнить запрос';
+    if (Array.isArray(message)) {
+      const fields = { username: 'имя пользователя: 3–50 букв и цифр без пробелов', email: 'электронную почту', password: 'пароль: от 6 знаков, латинские буквы, цифры, дефис или подчёркивание' };
+      const hints = [...new Set(message.map((item) => fields[item.loc?.at(-1)]).filter(Boolean))];
+      message = hints.length ? `Проверьте ${hints.join('; ')}.` : 'Проверьте введённые данные.';
+    }
     throw new ApiError(message, response.status);
   }
   return data;
@@ -48,9 +53,13 @@ export function authHeaders(token) {
 }
 
 export function friendlyError(error) {
+  if (error?.message === 'Username already exists') return 'Это имя пользователя уже занято.';
+  if (error?.message === 'Email already exists') return 'Эта электронная почта уже зарегистрирована.';
+  if (error?.message === 'Invalid username or password') return 'Неверное имя пользователя или пароль.';
   if (error?.status === 401) return 'Сессия закончилась. Войдите снова.';
   if (error?.status === 404) return 'Документ или папка не найдены.';
   if (error?.status === 409) {
+    if (error.message?.includes('сторона проверки') || error.message?.includes('извлеките поля')) return error.message;
     if (error.message?.includes('prepared')) return 'Документ ещё подготавливается.';
     if (error.message?.includes('running')) return 'Анализ этого документа уже выполняется.';
     return 'Папка с таким названием уже существует.';

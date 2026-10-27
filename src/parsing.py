@@ -161,6 +161,7 @@ def document_ir_to_text(
         pages = pages[:max_pages]
 
     chunks: list[str] = []
+    has_text = False
     for page in pages:
         page_number = page.number or 1
         chunks.append(f"PAGE {page_number}")
@@ -172,10 +173,11 @@ def document_ir_to_text(
         # DIGITAL-блоки остаются в IR для аудита, но не дублируются в тексте модели.
         selected = ocr_blocks if page.needs_ocr and ocr_blocks else page.blocks
         selected = sorted(selected, key=_reading_order)
+        has_text = has_text or any(block.text.strip() for block in selected)
         chunks.extend(block.text for block in selected)
 
     text = "\n\n".join(chunk for chunk in chunks if chunk.strip()).strip()
-    if not text:
+    if not has_text:
         raise ValueError("Документ не содержит текста для извлечения")
     return text
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,8 @@ from src.extraction.model_loading import (
     _count_tokens_mlx,
 )
 from src.extraction.postprocess import postprocess_extraction, validate_extraction
+from src.extraction.context import document_chunks
+from src.extraction.validation import validate_model_result, merge_extractions
 
 
 def build_messages(text: str) -> list[dict[str, Any]]:
@@ -122,7 +125,7 @@ def extract_fields_from_text(
         try:
             parsed = parse_json_output(raw)
         except Exception as exc:
-            raise ValueError(f"Модель вернула невалидный JSON: {raw}") from exc
+            raise ValueError("Модель вернула невалидный или незавершённый JSON") from exc
         if not isinstance(parsed, dict):
             raise ValueError("Модель вернула JSON, но не объект")
 
@@ -149,7 +152,10 @@ def extract_fields_from_text(
 
         prompt_tokens = inputs["input_ids"].shape[1]
 
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        limit = getattr(getattr(model.config, "text_config", model.config), "max_position_embeddings", None)
+        if limit and prompt_tokens + max_new_tokens > limit:
+            raise ValueError("Фрагмент превышает контекст модели; уменьшите EXTRACTION_CHUNK_CHARS")
+        inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
 
         with torch.inference_mode():
             generated_ids = model.generate(
@@ -171,7 +177,7 @@ def extract_fields_from_text(
         try:
             parsed = parse_json_output(raw)
         except Exception as exc:
-            raise ValueError(f"Модель вернула невалидный JSON: {raw}") from exc
+            raise ValueError("Модель вернула невалидный или незавершённый JSON") from exc
         if not isinstance(parsed, dict):
             raise ValueError("Модель вернула JSON, но не объект")
 
@@ -183,7 +189,7 @@ def extract_fields_from_text(
     if collect_stats:
         record_usage(prompt_tokens, completion_tokens)
 
-    return parsed
+    return validate_model_result(parsed, text)
 
 
 def extract_contract_key_data(
@@ -209,6 +215,7 @@ def extract_contract_key_data(
 
     if document is None and text is None:
         raise ValueError("Необходимо передать либо document, либо text")
+    initial_usage = get_extraction_stats().copy()
 
     if document is not None:
         extracted_text, extracted_document_ir = extract_text_from_document(
@@ -218,22 +225,18 @@ def extract_contract_key_data(
             start_page=start_page,
             max_pages=max_pages,
         )
-        result = extract_fields_from_text(
-            extracted_text,
-            extracted_document_ir,
-            thinking=thinking,
-            max_new_tokens=max_new_tokens,
-            collect_stats=collect_stats,
-        )
-    else:
-        result = extract_fields_from_text(
-            text,
+        text, document_ir = extracted_text, extracted_document_ir
+    chunks = document_chunks(text, int(os.getenv("EXTRACTION_CHUNK_CHARS", "12000")))
+    result = merge_extractions([
+        extract_fields_from_text(
+            chunk,
             document_ir,
             thinking=thinking,
             max_new_tokens=max_new_tokens,
             collect_stats=collect_stats,
-        )
+        ) for chunk in chunks
+    ])
 
     if collect_stats:
-        return result, get_extraction_stats()
+        return result, {key: value - initial_usage[key] for key, value in get_extraction_stats().items()}
     return result, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

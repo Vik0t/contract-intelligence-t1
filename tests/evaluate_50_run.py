@@ -32,7 +32,7 @@ def norm(value: Any) -> str:
 
 def date_value(value: Any) -> str | None:
     text = str(value or "")
-    iso = re.findall(r"(?<!\d)(19|20\d{2})[-./](\d{1,2})[-./](\d{1,2})(?!\d)", text)
+    iso = re.findall(r"(?<!\d)((?:19|20)\d{2})[-./](\d{1,2})[-./](\d{1,2})(?!\d)", text)
     if iso:
         # The first alternative is intentionally reparsed below because the
         # compact regex form also matches a four-digit year with a prefix.
@@ -146,7 +146,7 @@ def main() -> None:
         started = time.perf_counter()
         record: dict[str, Any] = {"id": doc_id, "path": str(pdf_path)}
         try:
-            result = extract_contract_key_data(
+            result, token_usage = extract_contract_key_data(
                 document=pdf_path,
                 thinking=False,
                 max_new_tokens=args.max_new_tokens,

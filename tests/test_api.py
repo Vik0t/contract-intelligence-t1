@@ -95,9 +95,27 @@ def test_service_root():
     assert response.json()["docs"] == "/docs"
 
 
+def test_swagger_uses_reverse_proxy_prefix(monkeypatch):
+    monkeypatch.setattr(app, "root_path", "/api")
+    monkeypatch.setattr(app, "servers", [])
+    monkeypatch.setattr(app, "openapi_schema", None)
+    response = client.get("/docs")
+    assert response.status_code == 200
+    assert "url: '/api/openapi.json'" in response.text
+    assert client.get("/").json()["docs"] == "/api/docs"
+    assert client.get("/openapi.json").json()["servers"] == [{"url": "/api"}]
+
+
 def test_favicon_probe_is_empty():
     response = client.get("/favicon.ico")
     assert response.status_code == 204
+
+
+def test_server_timestamps_include_timezone_for_remote_browsers():
+    from backend.api_requests import UserResponse
+    user = UserResponse(id=1, username="operator", email="operator@example.com", role="user", created_at=datetime(2026, 10, 26, 17, 0))
+    assert user.created_at.tzinfo is not None
+    assert datetime.fromisoformat(user.model_dump(mode="json")["created_at"]).utcoffset() is not None
 
 # ============ AUTHENTICATION TESTS ============
 
@@ -906,7 +924,145 @@ class TestMetadataEndpoints:
         assert response.status_code == 200
         assert response.json()["review_status"] == "pending"
         assert response.json()["reviewed_at"] is None
+
+    def test_refresh_summary_does_not_guess_risk_perspective(self, monkeypatch):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename="insights.pdf")
+            database.create_parsed_document(db, document.id, "PAGE 1\n\nДоговор продлевается автоматически")
+            database.create_metadata(db, document.id, {"contract_number": {"value": "12"}})
+            document_id = document.id
+        finally:
+            db.close()
+
+        monkeypatch.setattr(app_module, "summarize_document", lambda *_args: "Договор с автоматическим продлением.")
+        monkeypatch.setattr(app_module, "review_contract_risks", lambda *_args: pytest.fail("Risk review needs an explicit side"))
+        response = client.post(f"/documents/{document_id}/insights", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["errors"] == []
+        assert response.json()["metadata"]["summary"] == "Договор с автоматическим продлением."
+        assert response.json()["metadata"]["risks"] is None
+        assert response.json()["metadata"]["risk_review"] is None
+
+        edited = client.patch(
+            f"/documents/{document_id}/metadata", headers=headers,
+            json={"fields": {"contract_number": {"value": "13"}}},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["metadata"]["summary"] is None
+        assert edited.json()["metadata"]["risks"] is None
     
+    def test_background_analysis_cannot_overwrite_operator_edit(self, monkeypatch):
+        headers = get_auth_header()
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename="concurrent.pdf")
+            database.create_parsed_document(db, document.id, "PAGE 1\nДоговор №12")
+            database.create_metadata(db, document.id, {"contract_number": {"value": "12"}})
+            document_id = document.id
+        finally:
+            db.close()
+
+        def edit_while_generating(*_args):
+            editing = database.get_session(app_module.engine)
+            try:
+                database.update_metadata(editing, document_id, {"contract_number": {"value": "13"}})
+            finally:
+                editing.close()
+            return "Сводка по старым данным"
+
+        monkeypatch.setattr(app_module, "summarize_document", edit_while_generating)
+        monkeypatch.setattr(app_module, "review_contract_risks", lambda *_args: pytest.fail("Summary must not start a risk review"))
+        response = client.post(f"/documents/{document_id}/insights", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["metadata"]["fields"]["contract_number"]["value"] == "13"
+        assert response.json()["metadata"]["summary"] is None
+        assert response.json()["metadata"]["risks"] is None
+        assert response.json()["errors"]
+
+    def _risk_document(self):
+        headers = get_auth_header()
+        with database.get_session(app_module.engine) as db:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename="risk.pdf")
+            database.create_parsed_document(db, document.id, "PAGE 1\nДоговор поставки. Поставщик вправе увеличивать цену без согласия Покупателя.")
+            database.create_metadata(db, document.id, {"contract_number": {"value": "12"}})
+            return headers, document.id
+
+    def test_risk_review_requires_explicit_side_and_scope(self):
+        headers, document_id = self._risk_document()
+        for payload in ({}, {"contract_type": "supply", "user_side": "customer", "scope_confirmed": False}):
+            assert client.post(f"/documents/{document_id}/risks", headers=headers, json=payload).status_code == 422
+        stranger = get_auth_header(username="stranger", email="stranger@example.com")
+        payload = {"contract_type": "supply", "user_side": "customer", "scope_confirmed": True}
+        assert client.post(f"/documents/{document_id}/risks", headers=stranger, json=payload).status_code == 403
+
+    def test_catalog_review_is_persisted_and_invalidated_by_edit(self, monkeypatch):
+        headers, document_id = self._risk_document()
+        payload = {"contract_type": "supply", "user_side": "customer", "scope_confirmed": True}
+        def generated(text, fields, profile):
+            return {"status": "complete", "profile": profile.model_dump(), "findings": [{"rule_id": "price_change", "evidence": "Поставщик вправе увеличивать цену без согласия Покупателя.", "basis": {"criterion": "Правило каталога"}}], "coverage": {"chunks_total": 1, "chunks_scanned": 1}}
+        monkeypatch.setattr(app_module, "review_contract_risks", generated)
+        response = client.post(f"/documents/{document_id}/risks", headers=headers, json=payload)
+        assert response.status_code == 200
+        assert response.json()["metadata"]["risk_review"]["status"] == "complete"
+        assert response.json()["metadata"]["risks"][0]["basis"]
+        saved = client.get(f"/documents/{document_id}", headers=headers).json()
+        assert saved["metadata"]["risk_review"]["profile"]["user_side"] == "customer"
+        edited = client.patch(f"/documents/{document_id}/metadata", headers=headers, json={"fields": {"contract_number": {"value": "13"}}})
+        assert edited.json()["metadata"]["risk_review"] is None
+        assert edited.json()["metadata"]["risks"] is None
+
+    def test_risk_review_cannot_overwrite_operator_change(self, monkeypatch):
+        headers, document_id = self._risk_document()
+        def generated(*_args):
+            client.patch(f"/documents/{document_id}/metadata", headers=headers, json={"fields": {"contract_number": {"value": "13"}}}).raise_for_status()
+            return {"status": "complete", "findings": []}
+        monkeypatch.setattr(app_module, "review_contract_risks", generated)
+        response = client.post(f"/documents/{document_id}/risks", headers=headers, json={"contract_type": "supply", "user_side": "customer", "scope_confirmed": True})
+        assert response.status_code == 409
+        saved = client.get(f"/documents/{document_id}", headers=headers).json()
+        assert saved["metadata"]["fields"]["contract_number"]["value"] == "13"
+        assert saved["metadata"]["risk_review"] is None
+
+    def test_older_risk_run_cannot_overwrite_a_new_perspective(self, monkeypatch):
+        headers, document_id = self._risk_document()
+        def generated(*_args):
+            with database.get_session(app_module.engine) as db:
+                database.start_risk_review(db, document_id, {"contract_number": {"value": "12"}}, {"review_id": "newer", "status": "running", "profile": {"user_side": "provider"}})
+            return {"status": "complete", "findings": []}
+        monkeypatch.setattr(app_module, "review_contract_risks", generated)
+        response = client.post(f"/documents/{document_id}/risks", headers=headers, json={"contract_type": "supply", "user_side": "customer", "scope_confirmed": True})
+        assert response.status_code == 409
+        saved = client.get(f"/documents/{document_id}", headers=headers).json()
+        assert saved["metadata"]["risk_review"]["profile"]["user_side"] == "provider"
+
+    def test_failed_risk_run_never_publishes_partial_or_stale_results(self, monkeypatch):
+        headers, document_id = self._risk_document()
+        with database.get_session(app_module.engine) as db:
+            metadata = database.get_metadata(db, document_id)
+            metadata.risks = [{"title": "Старый риск"}]
+            db.commit()
+        def fail(*_args):
+            raise RuntimeError("provider returned internal secret that must not reach UI")
+        monkeypatch.setattr(app_module, "review_contract_risks", fail)
+        response = client.post(f"/documents/{document_id}/risks", headers=headers, json={"contract_type": "services", "user_side": "provider", "scope_confirmed": True})
+        assert response.status_code == 200
+        metadata = response.json()["metadata"]
+        assert metadata["risks"] is None
+        assert metadata["risk_review"]["status"] == "failed"
+        assert "secret" not in metadata["risk_review"]["error"]
+
+    def test_interrupted_risk_review_can_recover_after_restart(self):
+        _headers, document_id = self._risk_document()
+        with database.get_session(app_module.engine) as db:
+            database.start_risk_review(db, document_id, {"contract_number": {"value": "12"}}, {"review_id": "interrupted", "status": "running"})
+            database.recover_risk_reviews(db)
+            assert database.get_metadata(db, document_id).risk_review["status"] == "failed"
+
     def test_extract_metadata_success(self):
         """Test extracting metadata from a parsed document"""
         headers = get_auth_header()

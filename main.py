@@ -1,7 +1,7 @@
 import argparse
 import json
 
-from cuda_dll_setup import configure_cuda_dlls
+from tools.cuda_dll_setup import configure_cuda_dlls
 
 import platform
 if platform.system() != "Darwin":

@@ -1,0 +1,27 @@
+# Explicit opt-in: this profile sends contract text to your configured API.
+services:
+  backend:
+    image: contract-intelligence-backend:api
+    build:
+      args:
+        RUNTIME_IMAGE: ubuntu:24.04
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    gpus: !reset []
+    environment:
+      ML_ALLOW_EXTERNAL: "true"
+      EXTRACTION_BACKEND: api
+      SUMMARY_BACKEND: api
+      RISK_BACKEND: api
+    networks: !override [private, inference]
+  ml-check:
+    image: contract-intelligence-backend:api
+    gpus: !reset []
+    environment:
+      ML_ALLOW_EXTERNAL: "true"
+      EXTRACTION_BACKEND: api
+      SUMMARY_BACKEND: api
+      RISK_BACKEND: api
+    networks: !override [private, inference]
+    command: [python, -m, scripts.ml_check, --backend, api, --output, /reports/ml-check-api.json]
+networks:
+  inference:
