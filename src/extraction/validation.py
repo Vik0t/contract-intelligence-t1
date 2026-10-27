@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
+from decimal import Decimal
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 
 from src.extraction.context import evidence_pages
 from src.extraction.schema import CONTRACT_TYPE_LABELS, TERM_SEMANTIC_TYPES
+from src.extraction.reliability import assess_fields
+from src.extraction.party_resolution import merge_parties, link_from_source
 
 
 class FieldValue(BaseModel):
@@ -89,6 +93,17 @@ def validate_model_result(data: dict[str, Any], text: str) -> dict[str, Any]:
     for party in result["parties"]:
         ground(party, "name_evidence", "name_page_number", ["name", "role"])
         ground(party, "inn_evidence", "inn_page_number", ["inn"])
+        identity = lambda value: normalize(value or '').translate(str.maketrans('', '', '«»"“”'))
+        if party.get('name') and identity(party['name']) not in identity(party.get('name_evidence')):
+            party['grounding_reason'] = 'Фрагмент не подтверждает наименование стороны'
+    number = result['contract_number']
+    if number.get('value') and normalize(number['value']).replace(' ', '') not in normalize(number.get('evidence') or '').replace(' ', ''):
+        number.update(status='needs_review', reason='Фрагмент не подтверждает извлечённый номер')
+    total = result['total_amount']
+    if total.get('value') is not None:
+        numbers = re.findall(r'(?<!\w)-?\d+(?:[ \u00a0\u202f]\d{3})*(?:[.,]\d{1,2})?(?!\d)', total.get('evidence') or '')
+        if Decimal(str(total['value'])) not in {Decimal(re.sub(r'\s', '', value).replace(',', '.')) for value in numbers}:
+            total.update(status='needs_review', reason='Фрагмент не подтверждает извлечённую сумму')
     result["parties"] = [party for party in result["parties"] if party["name"] or party["inn"]]
     if result["contract_type"]["value"] not in CONTRACT_TYPE_LABELS:
         result["contract_type"]["value"] = None
@@ -99,33 +114,57 @@ def validate_model_result(data: dict[str, Any], text: str) -> dict[str, Any]:
                 date.fromisoformat(value)
         except ValueError:
             result[key]["value"] = None
+            result[key].update(status="needs_review", reason="Некорректная календарная дата")
+    from src.extraction.postprocess import _extract_date_candidates
+    item = result['contract_date']
+    if item.get('value') and item.get('evidence'):
+        dates = {candidate['value'] for candidate in _extract_date_candidates(item['evidence'])}
+        if item['value'] not in dates:
+            item.update(status='needs_review', reason='Фрагмент не подтверждает дату договора')
     if result["term"]["semantic_type"] not in TERM_SEMANTIC_TYPES:
         result["term"]["semantic_type"] = None
     if result["vat"]["mode"] not in {"included", "excluded", "not_subject", "not_stated"}:
         result["vat"]["mode"] = None
-    return result
+    return assess_fields(result, text)
 
 
-def merge_extractions(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """Prefer fields from the main agreement; later chunks fill only missing fields."""
+def merge_extractions(results: list[dict[str, Any]], text: str = "", document_ir=None) -> dict[str, Any]:
+    """Keep sources from every chunk and expose conflicting candidates for review."""
+    if not results:
+        raise ValueError("Нет результатов извлечения")
     merged = deepcopy(results[0])
     for result in results[1:]:
         for key, item in result.items():
+            if key.startswith("_"):
+                continue
             if key == "parties":
-                for party in item:
-                    existing = next((current for current in merged[key] if
-                                     (party.get("inn") and current.get("inn") == party["inn"]) or
-                                     (party.get("name") and current.get("name") == party["name"])), None)
-                    if existing is None:
-                        merged[key].append(deepcopy(party))
-                    else:
-                        for name, value in party.items():
-                            if existing.get(name) is None:
-                                existing[name] = value
+                merged[key] = merge_parties(merged[key], item)
             elif key == "vat":
                 current = merged[key]
                 if current.get("rate") is None and current.get("mode") not in {"included", "excluded", "not_subject"} and not current.get("raw_value"):
                     merged[key] = deepcopy(item)
             elif merged[key].get("value") is None and not merged[key].get("raw_value"):
                 merged[key] = deepcopy(item)
+            elif key in {"contract_number", "contract_date", "total_amount"} and item.get("value") is not None:
+                current = merged[key]
+                if current.get("value") != item["value"] or (key == "total_amount" and current.get("currency") and item.get("currency") and current["currency"] != item["currency"]):
+                    candidates = current.setdefault("candidates", [{k: current.get(k) for k in ("value", "currency", "evidence", "page_number")}])
+                    candidate = {k: item.get(k) for k in ("value", "currency", "evidence", "page_number")}
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+                    current.update(status="needs_review", reason="Найдены несколько различных значений")
+    merged['parties'], issues = link_from_source(merged.get('parties', []), text, document_ir)
+    if text:
+        from src.extraction.postprocess import postprocess_extraction, validate_extraction
+        merged = postprocess_extraction(merged, text)
+        if document_ir is not None:
+            merged = validate_extraction(merged, document_ir)
+        for key in ('contract_type', 'term', 'vat'):
+            item = merged.get(key) or {}
+            pages = evidence_pages(text, item.get('evidence') or '')
+            if item.get('page_number') not in pages:
+                item['page_number'] = pages[0] if len(pages) == 1 else None
+    merged = assess_fields(merged, text)
+    if issues:
+        merged['_quality']['parties'].update(status='needs_review', reason='; '.join(issues))
     return merged

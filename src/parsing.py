@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import unicodedata
 
 from docx import Document
 from docx.table import Table
@@ -18,6 +20,17 @@ from src.ocr import OCRBackend
 from src.pdf_parser import parse_pdf
 
 
+def normalize_document_text(text: str) -> str:
+    text = unicodedata.normalize("NFC", text)
+    text = "".join(c for c in text if c in "\n\t" or not unicodedata.category(c).startswith("C"))
+    text = text.replace("\u00ad", "")
+    text = re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", text)
+    text = text.translate(str.maketrans({"“": '"', "”": '"', "«": '"', "»": '"', "–": "-", "—": "-", "\u00a0": " "}))
+    text = re.sub(r"\bN[oо]\.?\s*(?=\d)", "№ ", text)
+    text = re.sub(r"[^\S\n]+", " ", text)
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip() and not all(unicodedata.category(c).startswith("C") for c in line)).strip()
+
+
 def parse_docx(file_path: str | Path) -> DocumentIR:
     """Преобразует DOCX в DocumentIR без попытки восстановить экранную пагинацию."""
     path = Path(file_path)
@@ -29,30 +42,37 @@ def parse_docx(file_path: str | Path) -> DocumentIR:
     document = Document(path)
     blocks: list[BlockIR] = []
 
-    for order, item in enumerate(document.iter_inner_content()):
+    seen_parts = set()
+
+    def append_item(item, kind=None):
         if isinstance(item, Table):
-            rows = [
-                " | ".join(cell.text.strip() for cell in row.cells)
-                for row in item.rows
-            ]
+            rows = [" | ".join(cell.text.strip() for cell in row.cells) for row in item.rows]
             text = "\n".join(row for row in rows if row.strip(" |"))
-            kind = BlockKind.TABLE
+            block_kind = kind or BlockKind.TABLE
         else:
             text = item.text.strip()
-            kind = BlockKind.PARAGRAPH
+            block_kind = kind or BlockKind.PARAGRAPH
+        text = normalize_document_text(text)
+        if text:
+            blocks.append(BlockIR(id=f"docx-block-{len(blocks)}", kind=block_kind,
+                                  text=text, source=BlockSource.DOCX, order=len(blocks)))
 
-        if not text:
-            continue
+    def append_margin(margin, kind):
+        if margin.part.partname in seen_parts:
+            return
+        seen_parts.add(margin.part.partname)
+        for item in margin.iter_inner_content():
+            append_item(item, kind)
 
-        blocks.append(
-            BlockIR(
-                id=f"docx-block-{order}",
-                kind=kind,
-                text=text,
-                source=BlockSource.DOCX,
-                order=order,
-            )
-        )
+    for section in document.sections:
+        for header in (section.header, section.first_page_header, section.even_page_header):
+            append_margin(header, BlockKind.HEADER)
+
+    for item in document.iter_inner_content():
+        append_item(item)
+    for section in document.sections:
+        for footer in (section.footer, section.first_page_footer, section.even_page_footer):
+            append_margin(footer, BlockKind.FOOTER)
 
     return DocumentIR(
         source_format=SourceFormat.DOCX,
@@ -131,7 +151,11 @@ def parse_document(
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        return parse_pdf(path, ocr_backend=ocr_backend, ocr_dpi=ocr_dpi)
+        parsed = parse_pdf(path, ocr_backend=ocr_backend, ocr_dpi=ocr_dpi)
+        for page in parsed.pages:
+            for block in page.blocks:
+                block.text = normalize_document_text(block.text) or block.text
+        return parsed
     if suffix == ".docx":
         return parse_docx(path)
     if suffix in {".jpg", ".jpeg", ".png"}:

@@ -47,6 +47,19 @@ def test_unicode_pdf_hyphens_do_not_break_real_source_highlight(tmp_path):
     assert location["rects"][0]["width"] > 0
 
 
+@pytest.mark.skipif(not (shutil.which("soffice") or shutil.which("libreoffice")), reason="LibreOffice unavailable")
+def test_docx_cyrillic_font_runs_do_not_break_number_highlight(tmp_path):
+    path = tmp_path / 'font-runs.docx'
+    doc = Document()
+    doc.add_paragraph('ДОГОВОР № 596/007-Т')
+    doc.add_paragraph('Заказчик: ООО «Модельный заказчик 007»')
+    doc.save(path)
+    location = locate_evidence(path, 'ДОГОВОР № 596/007-Т', preferred_page=1)
+    assert location is not None
+    assert location['page'] == 1
+    assert locate_evidence(path, 'ООО "Модельный заказчик 007"', preferred_page=1) is not None
+
+
 def test_photo_highlight_reuses_original_ocr_coordinates(tmp_path):
     path = tmp_path / "photo.jpg"
     Image.new("RGB", (1000, 1200), "white").save(path)

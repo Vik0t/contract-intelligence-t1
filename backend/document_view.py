@@ -97,20 +97,33 @@ def _search_terms(evidence: str) -> list[str]:
 
 def _normalize(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).casefold()
+    value = value.translate(str.maketrans({'«': '"', '»': '"', '“': '"', '”': '"', '–': '-', '—': '-'}))
     for character in ("\xad", "\u2010", "\u2011"):
         value = value.replace(character, "-")
     return " ".join(value.split())
 
 
-def _matching_rects(parts, evidence: str):
+def _matching_rects(parts, evidence: str, *, join_font_runs: bool = False):
     """Map an exact normalized text span back to its original word/block boxes."""
     text = ""
     spans = []
+    previous_rectangle = None
     for content, rectangle, line in parts:
         content = _normalize(content)
+        separator = ' ' if text else ''
+        if join_font_runs and previous_rectangle is not None:
+            # LibreOffice may split one word across Cyrillic/Latin font runs.
+            # Join touching boxes on the same physical line, preserving real spaces.
+            overlap = min(rectangle.y1, previous_rectangle.y1) - max(rectangle.y0, previous_rectangle.y0)
+            height = min(rectangle.height, previous_rectangle.height)
+            gap = rectangle.x0 - previous_rectangle.x1
+            if overlap > height * .5 and -.5 <= gap <= height * .12:
+                separator = ''
+        text += separator
         start = len(text)
-        text += content + " "
-        spans.append((start, len(text) - 1, rectangle, line))
+        text += content
+        spans.append((start, len(text), rectangle, line))
+        previous_rectangle = rectangle
     start = text.find(_normalize(evidence))
     if start < 0:
         return []
@@ -146,7 +159,7 @@ def locate_evidence(source: str | Path, evidence: str, preferred_page: int | Non
                     rectangles = page.search_for(term)
                     if not rectangles:
                         parts = [(word[4], pymupdf.Rect(word[:4]), (word[5], word[6])) for word in page.get_text("words", sort=True)]
-                        rectangles = _matching_rects(parts, term)
+                        rectangles = _matching_rects(parts, term, join_font_runs=True)
                     if rectangles:
                         return _location(index + 1, rectangles, page.rect.width, page.rect.height)
     # Scans and photos have no digital text layer. Reuse saved OCR coordinates;

@@ -235,7 +235,9 @@ def extract_contract_key_data(
             max_new_tokens=max_new_tokens,
             collect_stats=collect_stats,
         ) for chunk in chunks
-    ])
+    ], text, document_ir)
+    result['_provenance'] = {'messages': [build_messages(chunk) for chunk in chunks],
+                             'parameters': {'max_new_tokens': max_new_tokens, 'thinking': thinking}}
 
     if collect_stats:
         return result, {key: value - initial_usage[key] for key, value in get_extraction_stats().items()}

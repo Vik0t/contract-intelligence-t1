@@ -70,6 +70,7 @@ def prepare(args) -> None:
     require_label_coverage(labels, [int(FILE_PATTERN.match(path.name)[1]) for path in files], getattr(args, 'allow_unlabeled', False))
     manifest_path = args.output / "manifest.json"
     manifest = {"code_hash": code_hash(), "label_hash": label_source["sha256"], "label_source": label_source,
+                "docx_parser": args.docx_parser,
                 "created_at": datetime.now(timezone.utc).isoformat(), "files": [], "labels": labels}
     for index, source in enumerate(files, start=1):
         match = FILE_PATTERN.match(source.name)
@@ -83,7 +84,7 @@ def prepare(args) -> None:
                 entry.update(cached["entry"])
             else:
                 parse_path = source
-                if entry["format"] == "docx":
+                if entry["format"] == "docx" and args.docx_parser == "rendered-pdf":
                     copy = args.output / "converted" / source.name
                     copy.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, copy)
@@ -125,6 +126,7 @@ def run(args) -> None:
                       ML_HF_FALLBACK_ENABLED="false", HF_HUB_OFFLINE="1", DEEPCODE_ENABLE_THINKING="false",
                       EXTRACTION_API_PROVIDER="deepcode", EXTRACTION_API_MODEL=args.api_model,
                       EXTRACTION_API_MAX_NEW_TOKENS="4096", EXTRACTION_CHUNK_CHARS="12000")
+    os.environ['EXTRACTION_API_REPAIR_ENABLED'] = 'true'
     if args.backend == "api":
         args.api_model = preflight_model(args.api_model)
         os.environ["EXTRACTION_API_MODEL"] = args.api_model
@@ -135,7 +137,8 @@ def run(args) -> None:
         raise FileExistsError(f"{path} already exists; use --resume or a new output directory")
     config = {"backend": args.backend, "api_model": args.api_model if args.backend == "api" else None,
               "code_hash": manifest["code_hash"], "label_hash": manifest["label_hash"], "insights": args.insights,
-              "thinking": False, "chunk_chars": 12000, "max_new_tokens": 4096, "label_format": manifest.get("label_source", {}).get("format", "legacy")}
+              "thinking": False, "chunk_chars": 12000, "max_new_tokens": 4096, "label_format": manifest.get("label_source", {}).get("format", "legacy"),
+              "repair_enabled": args.backend == 'api', "reuse_key": "text-format-source", "docx_parser": manifest.get('docx_parser', 'rendered-pdf')}
     report = json.loads(path.read_text()) if args.resume and path.is_file() else {"config": config, "records": [], "started_at": datetime.now(timezone.utc).isoformat(), "machine": platform.machine()}
     if report["config"] != config:
         raise RuntimeError("Cannot resume with different models, inputs, code or configuration")
@@ -197,7 +200,12 @@ def run(args) -> None:
         passed = sum(value is True for value in checks.values()) if checks is not None else None
         print(f"{args.backend} {len(report['records'])}/{len(manifest['files'])} id={record['document_id']} {record['format']} {record['status']} fields={passed if passed is not None else 'unlabeled'}/11 sec={record.get('extraction_sec', 0)}", flush=True)
 
-    previous_by_hash = {item["input_hash"]: item for item in report["records"] if item.get("input_hash") and item.get("status") == "ok"}
+    # Source layout now participates in identity resolution. Equal plain text
+    # across formats no longer implies an identical extraction input.
+    sources = {(e['document_id'], e['format']): e.get('source_hash') for e in manifest['files']}
+    def reuse_key(item):
+        return (item.get('input_hash'), item['format'], sources[(item['document_id'], item['format'])])
+    previous_by_hash = {reuse_key(item): item for item in report["records"] if item.get("input_hash") and item.get("status") == "ok"}
     grouped = defaultdict(list)
 
     def reuse(reference, entry):
@@ -209,10 +217,10 @@ def run(args) -> None:
         collect(record)
 
     for entry in pending:
-        if entry.get("input_hash") in previous_by_hash:
-            reuse(previous_by_hash[entry["input_hash"]], entry)
+        if reuse_key(entry) in previous_by_hash:
+            reuse(previous_by_hash[reuse_key(entry)], entry)
         else:
-            grouped[entry.get("input_hash") or entry["filename"]].append(entry)
+            grouped[reuse_key(entry)].append(entry)
 
     def collect_group(record, entries):
         collect(record)
@@ -354,6 +362,7 @@ def main() -> None:
     parser.add_argument("--allow-unlabeled", action="store_true", help="Explicitly permit incomplete gold coverage")
     parser.add_argument("--source-results", type=Path, help="Immutable completed inference run for rescore")
     parser.add_argument("--dataset", type=Path, default=Path("dataset"))
+    parser.add_argument("--docx-parser", choices=['native', 'rendered-pdf'], default='native')
     parser.add_argument("--output", type=Path, default=Path("tmp/full-comparison-2026-10-26"))
     parser.add_argument("--backend", choices=["local", "api"], default="local")
     parser.add_argument("--api-model", default="qwen3.8-flash-next")

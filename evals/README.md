@@ -20,9 +20,14 @@ python -m scripts.benchmark_dataset run --backend api --allow-external-data --in
 python -m scripts.benchmark_dataset compare --output tmp/full-comparison-new-run
 ```
 
-Preparation reads every format, converts DOCX through LibreOffice and performs
-OCR where needed. Exact duplicate model inputs reuse a successful prediction;
-reuse is recorded and excluded from inference timing. API/local runs may execute
+Preparation reads every format and performs OCR where needed. DOCX uses the
+native parser, matching the application; `--docx-parser rendered-pdf` explicitly
+selects the historical LibreOffice route. Deployment profiles with
+`DOCX_USE_RENDERED_PAGES=true` require that option when measuring the deployed
+profile; a native comparison corresponds to `DOCX_USE_RENDERED_PAGES=false`. Reuse requires equal text, source
+format and source-file hash: equal text across PDF/DOCX is insufficient because
+party identity resolution also reads source layout. Reuse is recorded and
+excluded from inference timing. API/local runs may execute
 in separate processes after preparation. Use `--resume` after interruption;
 changing extraction/parsing/scoring code requires a fresh prepared run. Do not
 tune model prompts during a comparison. Evaluation counts failed labeled files
@@ -109,3 +114,17 @@ both the value and mode to match; `not_found` is not a zero rate. Party order
 is matched without detaching INNs from names. PDF page agreement is reported
 separately; shared gold page numbers are not applied to stitched PNGs or
 LibreOffice-repaginated DOCX files.
+
+## Missing fields and party identity
+
+Both backends resolve full/abbreviated legal names and source-backed INN records
+after chunk merging. Different named entities are never merged solely by INN.
+PDF column proofs and native DOCX records retain a source hash; ambiguous links
+require review.
+
+The API backend enables one bounded repair request for missing date, signing
+place, total or party data when relevant source cues exist. Source quotes and
+values are checked, existing scalar values are preserved, and repair failures
+leave the first-pass result available. Set `EXTRACTION_API_REPAIR_ENABLED=false`
+to disable this product feature; the full benchmark explicitly enables it and
+records that setting. Reported API time includes the repair.
