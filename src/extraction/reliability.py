@@ -101,6 +101,12 @@ def assess_fields(result: dict[str, Any], text: str = "", *, document=None,
             reason = "Источник относится к приложению, счёту или доверенности"
         if key == "total_amount":
             evidence = item.get("evidence") or ""
+            item.pop('amount_basis', None)
+            if (value is not None and re.search(r'оклад|заработн\w*\s+плат', evidence, re.I)
+                    and re.search(r'в\s+месяц|ежемесячн', evidence, re.I)
+                    and not re.search(r'(?:сумма|стоимость|цена)\s+(?:настоящего\s+)?договора', evidence, re.I)):
+                item['amount_basis'] = 'monthly_salary'
+                reason = 'В источнике указан месячный оклад; общая сумма договора не подтверждена'
             if re.search(r"аванс|штраф|неустойк|цен[аы]\s+(?:за\s+)?единиц", evidence, re.I) and not total_candidates(evidence):
                 reason = "Источник не подтверждает общую сумму договора"
             currency = item.get("currency")

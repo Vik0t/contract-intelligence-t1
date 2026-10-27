@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, Stric
 from src.extraction.context import evidence_pages
 from src.extraction.schema import CONTRACT_TYPE_LABELS, TERM_SEMANTIC_TYPES
 from src.extraction.reliability import assess_fields
-from src.extraction.party_resolution import merge_parties, link_from_source
+from src.extraction.party_resolution import merge_parties, link_from_source, name_spans
 
 
 class FieldValue(BaseModel):
@@ -93,8 +93,7 @@ def validate_model_result(data: dict[str, Any], text: str) -> dict[str, Any]:
     for party in result["parties"]:
         ground(party, "name_evidence", "name_page_number", ["name", "role"])
         ground(party, "inn_evidence", "inn_page_number", ["inn"])
-        identity = lambda value: normalize(value or '').translate(str.maketrans('', '', '«»"“”'))
-        if party.get('name') and identity(party['name']) not in identity(party.get('name_evidence')):
+        if party.get('name') and not name_spans(party['name'], party.get('name_evidence') or ''):
             party['grounding_reason'] = 'Фрагмент не подтверждает наименование стороны'
     number = result['contract_number']
     if number.get('value') and normalize(number['value']).replace(' ', '') not in normalize(number.get('evidence') or '').replace(' ', ''):
@@ -156,7 +155,9 @@ def merge_extractions(results: list[dict[str, Any]], text: str = "", document_ir
     merged['parties'], issues = link_from_source(merged.get('parties', []), text, document_ir)
     if text:
         from src.extraction.postprocess import postprocess_extraction, validate_extraction
+        from src.extraction.header_fields import recover_header_fields
         merged = postprocess_extraction(merged, text)
+        merged = recover_header_fields(merged, text)
         if document_ir is not None:
             merged = validate_extraction(merged, document_ir)
         for key in ('contract_type', 'term', 'vat'):

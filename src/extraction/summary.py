@@ -270,7 +270,7 @@ def _format_fields_block(extracted_fields: dict[str, Any]) -> str:
     # neither those prompts nor coordinate/debug records belong in model facts.
     technical = {'evidence', 'name_evidence', 'inn_evidence', 'page_number',
                  'name_page_number', 'inn_page_number', 'paragraph_number',
-                 'method', 'candidates', 'inn_candidates', 'inn_link', 'grounding_reason'}
+                 'method', 'rule_id', 'classification_basis', 'source_correction', 'candidates', 'inn_candidates', 'inn_link', 'grounding_reason'}
     def facts(value):
         if isinstance(value, dict):
             return {key: facts(item) for key, item in value.items()

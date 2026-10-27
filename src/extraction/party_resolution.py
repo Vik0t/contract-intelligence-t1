@@ -71,6 +71,47 @@ def inn_in_evidence(inn, evidence):
                 and re.search(r'(?<!\d)' + r'\s*'.join(inn) + r'(?!\d)', evidence or ''))
 
 
+def _labelled_records(parties, text):
+    """A role-labelled record can contain ID fields between name and INN.
+
+    Only an exact name-only row followed by personal/company identifiers is
+    accepted. Bank data, another actor or another tax ID makes it ambiguous.
+    """
+    lines = text.splitlines()
+    known = {identity(p['name']): p['name'] for p in parties if p.get('name')}
+    boundary = re.compile(r'^\s*(?:[А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\s/-]*:\s*|PAGE\s+\d+|\d+\.\s+\S.*)\s*$')
+    identifier = re.compile(r'^(?:паспорт|СНИЛС|КПП|ОГРН(?:ИП)?|дата\s+рождения|'
+                            r'гражданство|адрес(?:\s+(?:регистрации|проживания))?|'
+                            r'(?:юридический|почтовый|фактический)\s+адрес)\s*:', re.I)
+    proofs = {}
+    for party in parties:
+        name, role = party.get('name'), party.get('role')
+        if not name or not role:
+            continue
+        for index, line in enumerate(lines):
+            if identity(line.strip().rstrip(':').strip(' «»"')) != identity(role):
+                continue
+            if not line.rstrip().endswith(':'):
+                continue
+            stop = next((i for i in range(index + 1, len(lines)) if boundary.fullmatch(lines[i].strip())), len(lines))
+            rows = [row.strip() for row in lines[index + 1:stop] if row.strip()]
+            if not rows or identity(rows[0].strip(' ,.;')) != identity(name):
+                continue
+            record = '\n'.join(rows)
+            if any(key != identity(name) and name_spans(other, record) for key, other in known.items()):
+                continue
+            inns = re.findall(r'\bИНН\s*[:№]?\s*(\d{12}|\d{10})(?!\d)', record, re.I)
+            if len(set(inns)) != 1:
+                continue
+            for position, row in enumerate(rows[1:], 1):
+                if re.fullmatch(r'ИНН\s*[:№]?\s*\d{10}(?:\d{2})?\s*[.;]?', row, re.I):
+                    proofs.setdefault(identity(name), {})[inns[0]] = '\n'.join(rows[:position + 1])
+                    break
+                if not identifier.match(row):
+                    break
+    return proofs
+
+
 def source_links(parties, text):
     """Link only direct name/INN records, never the nearest arbitrary number.
 
@@ -108,6 +149,8 @@ def source_links(parties, text):
                 quote = text[match.start():end + following.end()]
             if len(inn_pattern.findall(quote)) == 1:
                 proofs.setdefault(key, {})[inn] = quote
+    for key, records in _labelled_records(parties, text).items():
+        proofs.setdefault(key, {}).update(records)
     return proofs
 
 

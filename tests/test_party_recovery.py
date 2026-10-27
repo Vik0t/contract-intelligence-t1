@@ -96,8 +96,10 @@ def test_repair_rejects_wrong_date_value_and_passport_source():
     text='PAGE 1\nДата подписания: 14.07.2033\nДоговор № Т-19\nПаспорт выдан 01.01.2020.'
     first=validate_model_result({'contract_date':{'value':None}},text)
     for evidence in ('Дата подписания: 14.07.2033','Паспорт выдан 01.01.2020.'):
-        result,_=recover_missing(first,text,lambda _:json.dumps({'contract_date':{'value':'2020-01-01','evidence':evidence}}),ContractResult.model_json_schema())
-        assert result['contract_date']['value'] is None
+        result,trace=recover_missing(first,text,lambda _:json.dumps({'contract_date':{'value':'2020-01-01','evidence':evidence}}),ContractResult.model_json_schema())
+        assert result['contract_date']['value']=='2033-07-14'
+        assert 'contract_date' not in trace['accepted']
+        assert result['contract_date']['method']=='rule'
 
 
 def test_repair_never_assumes_two_names_and_two_inns_have_matching_order():
@@ -120,7 +122,7 @@ def test_repair_failure_preserves_the_first_pass(monkeypatch):
             raise ConnectionError('Synthetic unavailable repair service')
         return json.dumps({'contract_number':{'value':'Т-19','evidence':'Договор № Т-19'}})
     monkeypatch.setattr(chat_pipeline,'generate_chat',generate)
-    result,_=chat_pipeline.extract_fields_with_api('PAGE 1\nДата подписания: 14.07.2033\nДоговор № Т-19')
+    result,_=chat_pipeline.extract_fields_with_api('PAGE 1\nДоговор № Т-19\nСТОРОНЫ: Alpha LLC Beta LLC\nИНН: 1234567890 ИНН: 9876543210')
     assert result['contract_number']['value']=='Т-19'
     assert result['contract_date']['value'] is None
     assert result['_repair']['status']=='error' and len(calls)==2

@@ -214,42 +214,33 @@ def _canonical_contract_type(text: str) -> str | None:
     return None
 
 
+def _heading_contract_type(heading):
+    canonical = _canonical_contract_type(heading) if heading else None
+    if canonical == 'Договор страхования имущества' and not re.search(r'имуществ', heading, re.I):
+        return None
+    return canonical
+
+
 def _normalize_contract_type(result: dict[str, Any], text: str) -> None:
     item = result.get("contract_type")
     if not isinstance(item, dict):
         return
 
     from src.extraction.schema import CONTRACT_TYPE_LABELS
+    from src.extraction.source_context import contract_heading, informative_subject_evidence
     # A named main heading is stronger evidence than a model class or mentions
     # in the parties' names, licences, penalty clauses or appendices.
-    first_page = re.split(r"(?m)^PAGE\s+\d+\s*$", text)
-    page_text = first_page[1] if len(first_page) > 1 and not first_page[0].strip() else first_page[0]
-    heading = None
-    lines = [line.strip() for line in page_text.splitlines() if line.strip()]
-    continuation = re.compile(
-        r"^(?:возмездного|оказания|поставки|перевозки|купли|подряда|хранения|"
-        r"займа|страхования|транспортно-|коммерческой|образовательных)\b", re.I,
-    )
-    for index, line in enumerate(lines):
-        if not re.match(r"^(?:трудовой\s+)?договор\b", line, re.I):
-            continue
-        title = re.split(r"[.!?]\s+", line, maxsplit=1)[0]
-        for following in lines[index + 1:index + 3]:
-            if not continuation.match(following):
-                break
-            title += " " + following
-        if _canonical_contract_type(title):
-            heading = title
-        # Never replace an unnamed main heading with a later appendix title.
-        break
-    if heading:
-        canonical = _canonical_contract_type(heading)
-    elif item.get("value") in CONTRACT_TYPE_LABELS:
-        return
-    else:
+    heading = contract_heading(text)
+    canonical = _heading_contract_type(heading)
+    if not canonical:
+        if item.get("value") in CONTRACT_TYPE_LABELS:
+            return
         evidence = item.get("evidence")
-        grounded = isinstance(evidence, str) and _normalize_text(evidence) in _normalize_text(text)
+        grounded = informative_subject_evidence(text, evidence)
         canonical = _canonical_contract_type(evidence) if grounded else None
+        if canonical == 'Договор страхования имущества' and not re.search(r'страхован\w*\s+имуществ', evidence, re.I):
+            canonical = None
+        heading = None
     if canonical is None:
         return
     if item.get("value") != canonical:
@@ -258,6 +249,26 @@ def _normalize_contract_type(result: dict[str, Any], text: str) -> None:
         item["value"] = canonical
     if heading:
         item["evidence"] = heading
+
+
+def _mark_classification_basis(result, text):
+    from src.extraction.source_context import contract_heading, informative_subject_evidence
+    item = result.get('contract_type')
+    if not isinstance(item, dict) or not item.get('value'):
+        return
+    heading = contract_heading(text)
+    evidence = item.get('evidence') or ''
+    if heading and evidence and _normalize_text(evidence) in _normalize_text(heading) and _heading_contract_type(heading) == item['value']:
+        item['classification_basis'] = 'heading'
+        if item.get('reason') in {'Вид договора определён по предмету; подтвердите классификацию',
+                                  'Цитата не подтверждает вид договора; проверьте заголовок и предмет'}:
+            item.update(status='found', reason=None)
+    elif informative_subject_evidence(text, evidence):
+        item.update(classification_basis='subject', status='needs_review',
+                    reason='Вид договора определён по предмету; подтвердите классификацию')
+    else:
+        item.update(classification_basis='unsupported', status='needs_review',
+                    reason='Цитата не подтверждает вид договора; проверьте заголовок и предмет')
 
 
 def _term_context(text: str, candidate: dict[str, Any]) -> str:
@@ -419,6 +430,7 @@ def _ground_vat_exemption(result: dict[str, Any], text: str) -> None:
 def postprocess_extraction(result: dict[str, Any], text: str) -> dict[str, Any]:
     """Normalize source-backed fields without inferring missing legal facts."""
     _normalize_contract_type(result, text)
+    _mark_classification_basis(result, text)
     _normalize_term(result, text)
     contract_date = result.get("contract_date")
     if isinstance(contract_date, dict):

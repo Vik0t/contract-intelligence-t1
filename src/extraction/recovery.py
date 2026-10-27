@@ -9,15 +9,17 @@ from src.extraction.context import document_chunks
 from src.extraction.party_resolution import identity, inn_in_evidence, name_spans
 from src.extraction.postprocess import postprocess_extraction, validate_extraction, _extract_date_candidates
 from src.extraction.validation import validate_model_result, merge_extractions
+from src.extraction.source_context import header_region, subject_region, informative_subject_evidence
 
 
 def header_text(text):
-    page = document_chunks(text, 4000)[0]
-    return re.split(r'\b(?:именуем\w*|в\s+лице|паспорт|ИНН|юридический\s+адрес)\b', page, maxsplit=1, flags=re.I)[0]
+    return header_region(text)
 
 
 def missing_fields(result, text):
     targets = []
+    if not result['contract_type'].get('value') and informative_subject_evidence(text, subject_region(text)):
+        targets.append('contract_type')
     header = header_text(text)
     if not result['contract_date'].get('value') and _extract_date_candidates(header):
         targets.append('contract_date')
@@ -36,7 +38,9 @@ def repair_context(text, targets):
     chunks = document_chunks(text, 4000)
     ranked = []
     for index, chunk in enumerate(chunks):
-        score = 10 if index == 0 and any(k in targets for k in ('contract_date', 'place', 'parties')) else 0
+        score = 10 if index == 0 and any(k in targets for k in ('contract_date', 'place', 'parties', 'contract_type')) else 0
+        if 'contract_type' in targets:
+            score += 8 * bool(re.search(r'предмет\s+договора|общие\s+положения|объект\w*\s+страхован', chunk, re.I))
         if 'parties' in targets:
             score += 8 * bool(re.search(r'реквизит|подписи\s+сторон', chunk, re.I))
             score += 3 * bool(re.search(r'\bИНН\b', chunk, re.I))
@@ -72,6 +76,8 @@ def recover_missing(result, text, request, schema, document_ir=None):
         'Для каждого имени и ИНН нужны отдельные короткие дословные цитаты и PAGE. '
         'Не объединяй несоседние фразы в одну цитату. Если связи нет, оставь ИНН null. '
         'Не делай юридических выводов и не угадывай отсутствующие значения.\n'
+        'contract_type определяй по предмету основного договора, подтверждай предложением об обязательстве или объекте. '
+        'Заголовок раздела «Предмет договора», штрафы, лицензии и реквизиты сами по себе вид не подтверждают.\n'
         f'Прежние кандидаты (не источник):\n{json.dumps({k: result[k] for k in targets}, ensure_ascii=False)}\n'
         f'JSON Schema:\n{json.dumps(selected_schema, ensure_ascii=False)}\n'
         f'<document>\n{context}\n</document>'
@@ -91,6 +97,8 @@ def recover_missing(result, text, request, schema, document_ir=None):
     for key in targets:
         value = candidate[key]
         evidence = value.get('evidence') if isinstance(value, dict) else None
+        if key == 'contract_type' and not informative_subject_evidence(text, evidence):
+            continue
         if key in ('contract_date', 'place'):
             if not evidence or normalize(evidence) not in normalize(header_text(text)):
                 continue
@@ -128,5 +136,7 @@ def recover_missing(result, text, request, schema, document_ir=None):
             updated[key] = value
     if 'parties' in accepted:
         updated = merge_extractions([updated, {'parties': accepted['parties']}], text, document_ir)
+    else:
+        updated = merge_extractions([updated], text, document_ir)
     trace['accepted'] = list(accepted)
     return updated, trace

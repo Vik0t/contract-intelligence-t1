@@ -1,5 +1,7 @@
 # Offline evaluation
 
+Latest residual-error iteration: [source records, header recovery and classification evidence](RESIDUAL_ERRORS_2026-10-27.md). Fresh Qwen: 1349/1375 (98.11%) on 125 files; NuExtract3 was rerun only on five development cases. These are not a new full paired model comparison.
+
 Latest fresh full-corpus comparison: [party/INN resolution and Qwen recovery, 27 October 2026](RESULTS_2026-10-27_REPAIRED.md).
 
 Historical full-label rescoring: [125 files / 50 labeled contracts](RESULTS_2026-10-27.md).
