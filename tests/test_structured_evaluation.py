@@ -145,3 +145,27 @@ def test_reviewed_labels_are_a_separate_version_bound_copy(tmp_path,monkeypatch)
     with pytest.raises(ValueError,match='verified upstream snapshot'):
         reviewer.reviewed_copy(source,tmp_path/'must-not-exist')
     assert not (tmp_path/'must-not-exist').exists()
+
+
+def test_error_analysis_replay_checks_source_and_preserves_saved_predictions(tmp_path):
+    import hashlib
+    from scripts.analyze_extraction_errors import analyze
+    labels=tmp_path/'labels';labels.mkdir();(labels/'1.json').write_text(json.dumps(gold()))
+    source=tmp_path/'source';source.mkdir()
+    text='PAGE 1\nДоговор действует до\n31.12.2026.'
+    cache=source/'cache.json';cache.write_text(json.dumps({'text':text}))
+    input_hash=hashlib.sha256(text.encode()).hexdigest()
+    manifest={'completed':True,'files':[{'document_id':1,'format':'pdf','input_hash':input_hash,'cache':str(cache)}]}
+    (source/'manifest.json').write_text(json.dumps(manifest))
+    fields=prediction();fields['term']['value']=None
+    for backend in ('local','api'):
+        report={'completed':True,'config':{},'records':[{'document_id':1,'format':'pdf','status':'ok','input_hash':input_hash,'fields':fields}]}
+        (source/f'{backend}.json').write_text(json.dumps(report))
+    original=(source/'local.json').read_bytes()
+    result=analyze(source,labels,replay=True)
+    assert result['models']['local']['error_inventory']['term']['errors']==1
+    assert result['models']['local']['exploratory_replay']['fixed_checks']==1
+    assert (source/'local.json').read_bytes()==original
+    cache.write_text(json.dumps({'text':'tampered input'}))
+    with pytest.raises(ValueError,match='Cached text differs'):
+        analyze(source,labels,replay=True)

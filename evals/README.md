@@ -2,6 +2,8 @@
 
 Corrected full-label comparison: [125 files / 50 labeled contracts, 27 October 2026](RESULTS_2026-10-27.md).
 
+Field-level causes and source-backed fixes: [error analysis, 27 October 2026](ERROR_ANALYSIS_2026-10-27.md).
+
 ## Full corpus comparison
 
 `scripts.benchmark_dataset` compares local NuExtract3 with the configured DeepCode

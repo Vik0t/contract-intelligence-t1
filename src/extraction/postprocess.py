@@ -220,44 +220,54 @@ def _normalize_contract_type(result: dict[str, Any], text: str) -> None:
         return
 
     from src.extraction.schema import CONTRACT_TYPE_LABELS
-    if item.get("value") in CONTRACT_TYPE_LABELS:
-        return
-
-    context = " ".join(
-        str(value)
-        for value in (item.get("value"), item.get("evidence"), text[:6000])
-        if value
+    # A named main heading is stronger evidence than a model class or mentions
+    # in the parties' names, licences, penalty clauses or appendices.
+    first_page = re.split(r"(?m)^PAGE\s+\d+\s*$", text)
+    page_text = first_page[1] if len(first_page) > 1 and not first_page[0].strip() else first_page[0]
+    heading = None
+    lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+    continuation = re.compile(
+        r"^(?:возмездного|оказания|поставки|перевозки|купли|подряда|хранения|"
+        r"займа|страхования|транспортно-|коммерческой|образовательных)\b", re.I,
     )
-    canonical = _canonical_contract_type(context)
+    for index, line in enumerate(lines):
+        if not re.match(r"^(?:трудовой\s+)?договор\b", line, re.I):
+            continue
+        title = re.split(r"[.!?]\s+", line, maxsplit=1)[0]
+        for following in lines[index + 1:index + 3]:
+            if not continuation.match(following):
+                break
+            title += " " + following
+        if _canonical_contract_type(title):
+            heading = title
+        # Never replace an unnamed main heading with a later appendix title.
+        break
+    if heading:
+        canonical = _canonical_contract_type(heading)
+    elif item.get("value") in CONTRACT_TYPE_LABELS:
+        return
+    else:
+        evidence = item.get("evidence")
+        grounded = isinstance(evidence, str) and _normalize_text(evidence) in _normalize_text(text)
+        canonical = _canonical_contract_type(evidence) if grounded else None
     if canonical is None:
         return
     if item.get("value") != canonical:
         if item.get("value"):
             item.setdefault("raw_value", item["value"])
         item["value"] = canonical
+    if heading:
+        item["evidence"] = heading
 
 
 def _term_context(text: str, candidate: dict[str, Any]) -> str:
-    sentence_start = max(
-        text.rfind(".", 0, candidate["start"]),
-        text.rfind(";", 0, candidate["start"]),
-        text.rfind("\n", 0, candidate["start"]),
-    )
-    sentence_end_candidates = [
-        position
-        for position in (
-            text.find(".", candidate["end"]),
-            text.find(";", candidate["end"]),
-            text.find("\n", candidate["end"]),
-        )
-        if position != -1
-    ]
-    sentence_end = min(sentence_end_candidates, default=len(text))
-    start = sentence_start + 1
-    end = sentence_end
-    if end - start < 30:
-        start = max(0, candidate["start"] - 100)
-        end = min(len(text), candidate["end"] + 120)
+    # Layout line breaks are not sentence boundaries. Numeric date dots are
+    # not punctuation boundaries either; never borrow cues from the next clause.
+    boundaries = list(re.finditer(
+        r"[.!?;](?=\s|$)|,\s*(?=а\s+в\s+части\b)|(?m:^PAGE\s+\d+\s*$)", text, re.I,
+    ))
+    start = max((m.end() for m in boundaries if m.end() <= candidate["start"]), default=0)
+    end = min((m.start() for m in boundaries if m.start() >= candidate["end"]), default=len(text))
     return _normalize_text(text[start:end]).replace("ё", "е")
 
 
@@ -312,6 +322,13 @@ def _term_candidate_score(
 def _evidence_snippet(text: str, candidate: dict[str, Any]) -> str:
     start = max(0, candidate["start"] - 100)
     end = min(len(text), candidate["end"] + 120)
+    # A citation belongs to one page; PAGE markers are metadata, not evidence.
+    for marker in re.finditer(r"(?m)^PAGE\s+\d+\s*$", text):
+        if marker.end() <= candidate["start"]:
+            start = max(start, marker.end())
+        elif marker.start() >= candidate["end"]:
+            end = min(end, marker.start())
+            break
     snippet = " ".join(text[start:end].split())
     return snippet[:320]
 
@@ -375,8 +392,32 @@ def _normalize_term(result: dict[str, Any], text: str) -> None:
         item["evidence"] = _evidence_snippet(text, selected)
 
 
+def _ground_vat_exemption(result: dict[str, Any], text: str) -> None:
+    vat = result.get("vat")
+    if isinstance(vat, dict) and vat.get("mode") == "not_subject":
+        evidence = vat.get("evidence") or ""
+        vat_mention = r"\bндс\b|налог\w*\s+на\s+добавленн\w*\s+стоимост"
+        if not re.search(vat_mention, _normalize_text(evidence)):
+            raw = vat.get("raw_value")
+            if (isinstance(raw, str) and raw.strip()
+                    and re.search(vat_mention, _normalize_text(raw))
+                    and _normalize_text(raw) in _normalize_text(text)):
+                # Prefer a verbatim VAT statement over an unrelated amount
+                # citation, but only when the raw phrase exists in the source.
+                vat["evidence"] = raw
+                from src.extraction.context import evidence_pages
+                pages = evidence_pages(text, raw)
+                if vat.get("page_number") not in pages:
+                    vat["page_number"] = pages[0] if len(pages) == 1 else None
+                return
+            # An interest-free loan or a tax regime alone does not state VAT
+            # treatment in this document. Do not infer a legal conclusion.
+            for key in ("rate", "mode", "raw_value", "evidence", "page_number"):
+                vat[key] = None
+
+
 def postprocess_extraction(result: dict[str, Any], text: str) -> dict[str, Any]:
-    """Canonicalize the two fields that need domain-aware selection."""
+    """Normalize source-backed fields without inferring missing legal facts."""
     _normalize_contract_type(result, text)
     _normalize_term(result, text)
     contract_date = result.get("contract_date")
@@ -384,4 +425,5 @@ def postprocess_extraction(result: dict[str, Any], text: str) -> dict[str, Any]:
         normalized_date = _date_from_text(contract_date.get("value"))
         if normalized_date is not None:
             contract_date["value"] = normalized_date
+    _ground_vat_exemption(result, text)
     return result
