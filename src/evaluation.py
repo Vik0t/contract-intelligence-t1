@@ -150,3 +150,73 @@ def summarize(records: list[dict]) -> dict:
         "insights_completed": sum(item.get("insights", {}).get("status") == "ok" for item in records),
         "insight_errors": sum(item.get("insights", {}).get("status") == "error" for item in records),
     }
+
+
+def structured_as_legacy(document: dict) -> dict:
+    """Reuse value normalization and one-to-one party alignment, not VAT semantics."""
+    gold = document['gold']
+    value = lambda key: gold[key].get('normalized_value')
+    parties = sorted(gold['parties'], key=lambda party: party.get('order', 0))
+    return {
+        'number': value('contract_number'), 'date': value('contract_date'),
+        'contract_type': value('contract_type'), 'place': value('place'), 'term': value('term'),
+        'amount': value('total_amount'), 'vat': 'unscored',
+        **{f'party{i}': party['name'].get('normalized_value') for i, party in enumerate(parties, 1)},
+        **{f'inn{i}': party['inn'].get('normalized_value') for i, party in enumerate(parties, 1)},
+    }
+
+
+def vat_components(document: dict, result: dict) -> dict[str, bool]:
+    gold = document['gold']['vat']
+    predicted = result.get('vat') or {}
+    mode = predicted.get('mode')
+    rate = amount(predicted.get('rate'))
+    expected_mode = {'not_applicable': 'not_subject'}.get(gold.get('mode'), gold.get('mode'))
+    if gold.get('status') == 'not_found':
+        # Some upstream labels erroneously store 0 for not_found. Status means
+        # no VAT information, never a declared zero rate or an exemption.
+        mode_ok = mode in (None, 'not_stated')
+        value_ok = rate is None
+    elif expected_mode == 'not_subject':
+        mode_ok = mode == 'not_subject'
+        value_ok = mode_ok and rate in (None, Decimal(0))
+    else:
+        mode_ok = mode == expected_mode
+        value_ok = rate == amount(gold.get('normalized_value'))
+    return {'value': value_ok, 'mode': mode_ok, 'combined': value_ok and mode_ok}
+
+
+def score_gold(document: dict, result: dict) -> dict[str, bool | None]:
+    if 'gold' not in document:
+        return score_legacy(document, result)
+    scores = score_legacy(structured_as_legacy(document), result)
+    scores['vat'] = vat_components(document, result)['combined']
+    return scores
+
+
+def score_pages(document: dict, result: dict) -> dict[str, bool]:
+    """Physical PDF page agreement; callers must not treat stitched PNG as PDF pages."""
+    gold = document['gold']
+    pages = {}
+    def check(key, annotation, predicted_page):
+        expected = {item['page'] for item in annotation.get('evidence', []) if type(item.get('page')) is int}
+        if expected:
+            pages[key] = type(predicted_page) is int and predicted_page in expected
+    for key in ('contract_number','contract_date','contract_type','place','term','total_amount','vat'):
+        check(key, gold[key], (result.get(key) or {}).get('page_number'))
+    # Use the same identity-preserving matching as value scoring. Never compare
+    # parties by output order or detach an INN from its company.
+    expected = sorted(gold['parties'], key=lambda p: p.get('order', 0))
+    predicted = [p for p in result.get('parties', []) if isinstance(p, dict)]
+    indices = [-1, *range(len(predicted))]
+    get = lambda i: predicted[i] if i >= 0 else {}
+    candidates = [pair for pair in product(indices, repeat=2) if pair[0] == -1 or pair[1] == -1 or pair[0] != pair[1]]
+    def match(pair):
+        return sum(10 * (name(get(index).get('name')) == name(party['name'].get('normalized_value')))
+                   + (not missing(party['inn'].get('normalized_value')) and norm(get(index).get('inn')) == norm(party['inn']['normalized_value']))
+                   for party, index in zip(expected, pair))
+    selected = max(candidates, key=match)
+    for i, (party, index) in enumerate(zip(expected, selected), 1):
+        check(f'party{i}_name', party['name'], get(index).get('name_page_number'))
+        check(f'party{i}_inn', party['inn'], get(index).get('inn_page_number'))
+    return pages

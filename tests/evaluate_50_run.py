@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from src.local_extraction import extract_contract_key_data
+from src.evaluation import score_gold
+from src.evaluation_labels import load_labels
 
 
 FIELD_NAMES = [
@@ -118,6 +120,8 @@ def score(meta: dict[str, Any], result: dict[str, Any]) -> dict[str, bool]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="dataset")
+    parser.add_argument("--labels", type=Path, default=Path("meta"))
+    parser.add_argument("--allow-unlabeled", action="store_true")
     parser.add_argument("--output", default="tmp/eval_50_results.json")
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--resume", action="store_true")
@@ -126,14 +130,16 @@ def main() -> None:
     dataset = Path(args.dataset)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata = json.loads((dataset / "meta.json").read_text(encoding="utf-8"))
-    if isinstance(metadata, dict) and "value" in metadata:
-        metadata = metadata["value"]
-    metadata_by_id = {int(item["id"]): item for item in metadata}
+    metadata_by_id, label_source = load_labels(args.labels)
     ids = list(range(1, 51))
+    absent = sorted(set(ids) - set(metadata_by_id))
+    if absent and not args.allow_unlabeled:
+        raise ValueError(f"Missing labels for {absent}; use the full meta directory")
     records: list[dict[str, Any]] = []
     if args.resume and output_path.is_file():
         previous = json.loads(output_path.read_text(encoding="utf-8"))
+        if previous.get("label_hash") != label_source["sha256"]:
+            raise ValueError("Cannot resume with different or unversioned labels; use a new output")
         records = list(previous.get("records", []))
     processed_ids = {int(record["id"]) for record in records}
     run_started = datetime.now().astimezone().isoformat()
@@ -153,7 +159,7 @@ def main() -> None:
             )
             elapsed = round(time.perf_counter() - started, 3)
             if doc_id in metadata_by_id:
-                field_scores = score(metadata_by_id[doc_id]["meta"], result)
+                field_scores = score_gold(metadata_by_id[doc_id], result)
                 record.update(
                     {
                         "status": "ok",
@@ -191,7 +197,7 @@ def main() -> None:
         records.append(record)
         output_path.write_text(
             json.dumps(
-                {"run_started": run_started, "records": records},
+                {"run_started": run_started, "label_hash": label_source["sha256"], "label_source": label_source, "records": records},
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -232,7 +238,7 @@ def main() -> None:
     }
     output_path.write_text(
         json.dumps(
-            {"run_started": run_started, "summary": summary, "records": records},
+            {"run_started": run_started, "label_hash": label_source["sha256"], "label_source": label_source, "summary": summary, "records": records},
             ensure_ascii=False,
             indent=2,
         ),

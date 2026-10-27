@@ -1,21 +1,21 @@
 # Offline evaluation
 
-Completed comparison: [125-file results, 27 October 2026](RESULTS_2026-10-27.md).
+Corrected full-label comparison: [125 files / 50 labeled contracts, 27 October 2026](RESULTS_2026-10-27.md).
 
 ## Full corpus comparison
 
 `scripts.benchmark_dataset` compares local NuExtract3 with the configured DeepCode
 model using identical cached text and DocumentIR. The current corpus has 50 PDF,
-50 DOCX and 25 PNG files; legacy `dataset/meta.json` labels cover 27 contract IDs
+50 DOCX and 25 PNG files. The separate `meta.zip` provides structured gold for all 50 contract IDs; the older embedded `dataset/meta.json` covers only 27 IDs
 (58 file variants), not the entire corpus. No gold summaries or risk annotations
 are available. Insight checks establish execution/citation grounding, not legal
 accuracy. Reports and caches contain document data and stay under ignored `tmp/`.
 
 ```bash
-python -m scripts.benchmark_dataset prepare --output tmp/full-comparison-2026-10-26
-python -m scripts.benchmark_dataset run --backend local --output tmp/full-comparison-2026-10-26
-python -m scripts.benchmark_dataset run --backend api --allow-external-data --insights --workers 2 --output tmp/full-comparison-2026-10-26
-python -m scripts.benchmark_dataset compare --output tmp/full-comparison-2026-10-26
+python -m scripts.benchmark_dataset prepare --output tmp/full-comparison-new-run
+python -m scripts.benchmark_dataset run --backend local --output tmp/full-comparison-new-run
+python -m scripts.benchmark_dataset run --backend api --allow-external-data --insights --workers 2 --output tmp/full-comparison-new-run
+python -m scripts.benchmark_dataset compare --output tmp/full-comparison-new-run
 ```
 
 Preparation reads every format, converts DOCX through LibreOffice and performs
@@ -28,17 +28,10 @@ as failures, also reporting accuracy conditional on successful extraction.
 Company names and INNs are matched as pairs. Paired confidence intervals resample
 contract IDs rather than treating format variants as independent documents.
 
-The numbered benchmark scripts currently live under `tests/` for compatibility
-with the existing workflow:
-
-- `evaluate_50_run.py` runs the 50-document benchmark;
-- `analyze_50_metrics.py` summarizes the benchmark;
-- `analyze_50_new_meta.py` compares results with the current labels.
-
-They are intentionally kept separate from the regular `pytest` suite by their
-names and are not part of the product runtime. A future ML pass can move them
-here together with versioned evaluation configuration and private label
-artifacts.
+`tests/evaluate_50_run.py` remains a single-format local diagnostic. It also
+uses structured `--labels meta` by default and rejects resumes under a different
+annotation fingerprint. Use `scripts.benchmark_dataset` for the complete
+multi-format comparison and offline rescoring.
 
 ## Hugging Face Space experiment
 
@@ -73,3 +66,44 @@ full local pipeline before being used as a product default.
 The public Space may sleep, queue requests, rate-limit callers, or change its
 endpoint. Do not use it for confidential production documents. The benchmark
 stores the parsed result and raw remote response in `evals/` for local review.
+
+
+## Restore the complete labels and rescore saved model outputs
+
+The document archive and the annotation archive are separate. Restore both with:
+
+```bash
+python tools/make_dataset.py
+# Or only labels, preserving existing documents:
+python tools/make_dataset.py --labels-only
+# A privately downloaded archive can be supplied without anonymous Drive access:
+python tools/make_dataset.py --labels-only --meta-archive /path/to/meta.zip
+```
+
+The numbered files are installed as `meta/1.json` … `meta/50.json`, never
+`meta/meta/1.json`. Existing differing labels are preserved and produce an error.
+Raw labels and archives remain outside Git.
+
+```bash
+# Full upstream labels, no new model calls:
+python -m scripts.benchmark_dataset rescore \
+  --source-results tmp/full-comparison-2026-10-26 \
+  --labels meta --output tmp/full-comparison-meta50-raw
+
+# Optional, separately recorded source-checked annotation corrections:
+python -m scripts.review_dataset_labels --source meta --output tmp/meta-reviewed
+python -m scripts.benchmark_dataset rescore \
+  --source-results tmp/full-comparison-2026-10-26 \
+  --labels tmp/meta-reviewed --output tmp/full-comparison-meta50-reviewed
+```
+
+Fresh `prepare` defaults to structured `--labels meta`. Incomplete coverage is
+rejected unless `--allow-unlabeled` is explicitly selected. To reproduce legacy
+scoring, specify `--labels dataset/meta.json --allow-unlabeled`.
+
+Rescoring preserves the original reports, input hashes and inference code hash.
+It records separate annotation and evaluator hashes. Structured VAT requires
+both the value and mode to match; `not_found` is not a zero rate. Party order
+is matched without detaching INNs from names. PDF page agreement is reported
+separately; shared gold page numbers are not applied to stitched PNGs or
+LibreOffice-repaginated DOCX files.
