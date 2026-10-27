@@ -266,8 +266,21 @@ def _format_fields_block(extracted_fields: dict[str, Any]) -> str:
     if not extracted_fields:
         return "(поля не извлечены)"
 
+    # Source text is supplied separately. Provenance contains complete prompts;
+    # neither those prompts nor coordinate/debug records belong in model facts.
+    technical = {'evidence', 'name_evidence', 'inn_evidence', 'page_number',
+                 'name_page_number', 'inn_page_number', 'paragraph_number',
+                 'method', 'candidates', 'inn_candidates', 'inn_link', 'grounding_reason'}
+    def facts(value):
+        if isinstance(value, dict):
+            return {key: facts(item) for key, item in value.items()
+                    if not key.startswith('_') and key not in technical}
+        if isinstance(value, list):
+            return [facts(item) for item in value]
+        return value
+
     lines: list[str] = []
-    for key, value in extracted_fields.items():
+    for key, value in facts(extracted_fields).items():
         if value in (None, "", []):
             continue
         if isinstance(value, (dict, list)):
