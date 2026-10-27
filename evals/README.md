@@ -1,6 +1,8 @@
 # Offline evaluation
 
-Corrected full-label comparison: [125 files / 50 labeled contracts, 27 October 2026](RESULTS_2026-10-27.md).
+Latest fresh full-corpus comparison: [party/INN resolution and Qwen recovery, 27 October 2026](RESULTS_2026-10-27_REPAIRED.md).
+
+Historical full-label rescoring: [125 files / 50 labeled contracts](RESULTS_2026-10-27.md).
 
 Field-level causes and source-backed fixes: [error analysis, 27 October 2026](ERROR_ANALYSIS_2026-10-27.md).
 
