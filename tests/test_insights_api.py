@@ -1,8 +1,24 @@
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import httpx
 import pytest
 
 from src.extraction import risks, summary
+
+
+def test_local_analysis_imports_without_api_credentials():
+    """Importing the backend must not initialize a hosted client or require a key."""
+    env = {key: value for key, value in os.environ.items() if key not in {"OPENAI_API_KEY", "OPENROUTER_API_KEY", "HF_TOKEN"}}
+    env.update(PYTHON_DOTENV_DISABLED="1", SUMMARY_BACKEND="local", ML_ALLOW_EXTERNAL="false")
+    result = subprocess.run(
+        [sys.executable, "-c", "import runpy; from src.extraction import summary, risk_review; assert summary.summary_backend() == 'local'; runpy.run_path('deepseek_test.py')"],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.fixture(autouse=True)

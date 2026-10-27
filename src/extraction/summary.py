@@ -21,13 +21,6 @@ logger = logging.getLogger(__name__)
 # Переключатель бэкенда суммаризации
 # "api" (по умолчанию) — вызов через выбранный SUMMARY_PROVIDER
 # "local" — загрузка модели на эту машину через transformers
-client = OpenAI(
-    base_url="https://deepcode.ci.nsu.ru/api/v1",
-    api_key= os.environ.get("OPENROUTER_API_KEY")
-)
-
-
-
 SUMMARY_BACKEND_ENV = "SUMMARY_BACKEND"
 
 SUMMARY_MODEL_NAME = os.environ.get(
