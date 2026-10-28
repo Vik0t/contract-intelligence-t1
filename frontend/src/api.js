@@ -35,10 +35,11 @@ export async function request(path, options = {}) {
   return data;
 }
 
-export async function requestBlob(path, token, signal) {
+export async function requestBlob(path, token, signal, cache = 'default') {
   const response = await fetch(`${API_PREFIX}${path}`, {
     headers: authHeaders(token),
     signal,
+    cache,
   });
   if (!response.ok) {
     const data = await parseResponse(response);

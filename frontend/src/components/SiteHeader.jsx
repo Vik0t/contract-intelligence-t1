@@ -1,19 +1,8 @@
+import logo from '../assets/t1-logo.svg';
+
 export default function SiteHeader({ user, onHome, onLogout }) {
-  return (
-    <header className="site-header">
-      <button className="brand" type="button" onClick={onHome} aria-label="К списку договоров">
-        <span className="brand-mark" aria-hidden="true">+I</span>
-        <span className="brand-name">T1</span>
-      </button>
-      {user ? (
-        <div className="header-account">
-          <span className="header-product">Договоры</span>
-          <span className="account-name">{user.username}</span>
-          <button className="header-logout" type="button" onClick={onLogout}>Выйти</button>
-        </div>
-      ) : (
-        <span className="header-product">Интеллектуальная проверка договоров</span>
-      )}
-    </header>
-  );
+  return <header className="site-header">
+    <div className="header-identity"><button className="brand" type="button" onClick={onHome} aria-label="Т1 — к списку договоров"><img src={logo} alt="Т1" width="82" height="32" /></button><span className="header-divider" aria-hidden="true" /><span className="header-product">Анализ договоров</span></div>
+    {user ? <div className="header-account"><span className="account-name">{user.username}</span><button className="header-logout" type="button" onClick={onLogout}>Выйти</button></div> : null}
+  </header>;
 }

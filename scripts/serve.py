@@ -8,9 +8,16 @@ from scripts.check_runtime import check_runtime
 
 
 def main() -> None:
+    from backend.config import get_settings
+    from backend.delivery_profile import validate_delivery_profile
+    validate_delivery_profile(get_settings())
     backends = {os.getenv(name, "local") for name in ("EXTRACTION_BACKEND", "SUMMARY_BACKEND", "RISK_BACKEND")}
+    rules = os.getenv('EXTRACTION_BACKEND') == 'rules'
     local = backends == {"local"}
-    if local:
+    if rules:
+        if os.getenv('ML_ALLOW_EXTERNAL', 'false').lower() != 'false':
+            raise RuntimeError('Режим rules требует ML_ALLOW_EXTERNAL=false')
+    elif local:
         if os.getenv("ML_ALLOW_EXTERNAL", "false").lower() != "false":
             raise RuntimeError("Локальный серверный профиль требует ML_ALLOW_EXTERNAL=false")
     elif backends == {"api"}:
@@ -19,7 +26,7 @@ def main() -> None:
         if not all(os.getenv(name) for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "EXTRACTION_API_MODEL", "SUMMARY_MODEL_NAME", "RISK_MODEL_NAME")):
             raise RuntimeError("Для API-профиля не заданы адрес, ключ или имена моделей")
     else:
-        raise RuntimeError("Используйте согласованный local или api серверный профиль")
+        raise RuntimeError("Используйте local, api или rules серверный профиль")
     print(json.dumps(check_runtime(require_gpu=local, require_models=local), ensure_ascii=False), flush=True)
     os.execv(sys.executable, [sys.executable, "-m", "uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"])
 

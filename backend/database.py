@@ -1,5 +1,5 @@
 from sqlalchemy import Float, create_engine, Column, Integer, String, DateTime, ForeignKey, Text, JSON, CheckConstraint, Boolean, Index, inspect, text, or_, cast
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship, joinedload
 from sqlalchemy.sql import func
 from datetime import datetime, timedelta
 import json
@@ -147,6 +147,7 @@ def get_engine(db_path='sqlite:///documents.db'):
         from sqlalchemy import event
         @event.listens_for(engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
+            dbapi_connection.create_function('casefold', 1, lambda value: (value or '').casefold(), deterministic=True)
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
@@ -354,7 +355,7 @@ def get_documents_by_owner(session, owner_id):
     return session.query(Document).filter(Document.owner == owner_id).all()
 
 def get_documents_by_owner_paginated(session, owner_id, page=1, limit=50,
-                                     folder_id=None, search=None):
+                                     folder_id=None, search=None, sort_by='created_at', sort_order='desc', view_status='all'):
     """Get paginated documents for a specific owner.
 
     search matches both the filename and the extracted metadata fields
@@ -362,20 +363,35 @@ def get_documents_by_owner_paginated(session, owner_id, page=1, limit=50,
     not a structured per-field lookup).
     """
     offset = (page - 1) * limit
-    query = session.query(Document).filter(Document.owner == owner_id)
+    query = session.query(Document).outerjoin(DocumentMetadata).filter(Document.owner == owner_id)
     if folder_id is not None:
         query = query.filter(Document.folder_id == folder_id)
+    if view_status == 'pending':
+        query = query.filter(DocumentMetadata.id.isnot(None), Document.review_status != 'reviewed', Document.processing_status.notin_(['failed', 'processing']))
+    elif view_status == 'reviewed':
+        query = query.filter(DocumentMetadata.id.isnot(None), Document.review_status == 'reviewed', Document.processing_status.notin_(['failed', 'processing']))
+    elif view_status == 'processing':
+        query = query.filter(or_(Document.processing_status == 'processing',
+                                (Document.processing_status == 'uploaded') & DocumentMetadata.id.is_(None)))
+    elif view_status == 'failed':
+        query = query.filter(Document.processing_status == 'failed')
     if search:
-        query = query.outerjoin(
-            DocumentMetadata, DocumentMetadata.document_id == Document.id
-        ).filter(
-            or_(
-                Document.filename.ilike(f'%{search}%'),
-                cast(DocumentMetadata.fields, String).ilike(f'%{search}%'),
-            )
-        )
+        columns = (Document.filename, cast(DocumentMetadata.fields, String))
+        if session.bind.dialect.name == 'sqlite':
+            query = query.filter(or_(*(func.casefold(column).contains(search.casefold(), autoescape=True) for column in columns)))
+        else:
+            query = query.filter(or_(*(column.icontains(search, autoescape=True) for column in columns)))
     total = query.count()
-    documents = query.order_by(Document.created_at.desc()).offset(offset).limit(limit).all()
+    sort_columns = {
+        'created_at': Document.created_at,
+        'contract_date': DocumentMetadata.fields['contract_date']['value'].as_string(),
+        'total_amount': cast(DocumentMetadata.fields['total_amount']['value'].as_string(), Float),
+    }
+    column = sort_columns[sort_by]
+    ordering = column.asc() if sort_order == 'asc' else column.desc()
+    documents = query.options(joinedload(Document.document_metadata), joinedload(Document.parsed_text)).order_by(
+        ordering.nullslast(), Document.id.desc()
+    ).offset(offset).limit(limit).all()
     return documents, total
 
 def get_folders_by_owner(session, owner_id):
@@ -448,6 +464,7 @@ def delete_document(session, document_id):
     """Delete a document and all related data."""
     doc = get_document(session, document_id)
     if doc:
+        session.query(Stats).filter(Stats.document_id == document_id).delete(synchronize_session=False)
         session.query(ProcessingJob).filter(
             ProcessingJob.document_id == document_id
         ).delete(synchronize_session=False)

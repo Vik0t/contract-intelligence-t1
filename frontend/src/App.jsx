@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError, API_PREFIX, authHeaders, friendlyError, request } from './api.js';
 import AuthView from './components/AuthView.jsx';
 import DocumentLibrary from './components/DocumentLibrary.jsx';
 import DocumentWorkspace from './components/DocumentWorkspace.jsx';
 import SiteHeader from './components/SiteHeader.jsx';
+import { useConfirmation } from './components/ConfirmationDialog.jsx';
 import { fieldsForSave } from './contractFields.js';
 import './App.css';
 
@@ -17,6 +18,7 @@ function getSavedUser() {
 }
 
 export default function App() {
+  const [confirmAction, confirmationDialog] = useConfirmation();
   const [token, setToken] = useState(() => localStorage.getItem('contract_token'));
   const [user, setUser] = useState(getSavedUser);
   const [authMode, setAuthMode] = useState('login');
@@ -25,22 +27,55 @@ export default function App() {
   const [folders, setFolders] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [totalDocuments, setTotalDocuments] = useState(0);
+  const [resultTotal, setResultTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [viewStatus, setViewStatus] = useState('all');
+  const [workspaceDirty, setWorkspaceDirty] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState('');
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [selectedDocument, setSelectedDocument] = useState(null);
+  const [openingDocumentId, setOpeningDocumentId] = useState(null);
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('created_at');
+  const [sortOrder, setSortOrder] = useState('desc');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const libraryRequestIdRef = useRef(0);
   const autoAnalyzeIdsRef = useRef(new Set());
   const activeTokenRef = useRef(token);
+  const openRequestIdRef = useRef(0);
+  const libraryPositionRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!token || selectedDocument || libraryLoading || libraryError || !libraryPositionRef.current) return undefined;
+    const position = libraryPositionRef.current;
+    libraryPositionRef.current = null;
+    const frame = requestAnimationFrame(() => {
+      window.scrollTo({ top: position.scrollY, behavior: 'instant' });
+      const rows = Array.from(document.querySelectorAll('[data-document-id]'));
+      const row = rows.find(item => item.dataset.documentId === String(position.documentId)) || rows.find(item => {
+        const bounds = item.getBoundingClientRect();
+        return bounds.bottom > 0 && bounds.top < window.innerHeight;
+      });
+      const target = row?.querySelector('[data-open-document]');
+      const bounds = target?.getBoundingClientRect();
+      if (target) target.focus({ preventScroll: bounds.bottom > 0 && bounds.top < window.innerHeight });
+      else document.querySelector('.library-content')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedDocument?.id, token, libraryLoading, libraryError]);
 
   const clearSession = useCallback(() => {
     if (activeTokenRef.current !== token) return;
     activeTokenRef.current = null;
     libraryRequestIdRef.current += 1;
     autoAnalyzeIdsRef.current.clear();
+    openRequestIdRef.current += 1;
+    libraryPositionRef.current = null;
+    setOpeningDocumentId(null);
     localStorage.removeItem('contract_token');
     localStorage.removeItem('contract_user');
     setToken(null);
@@ -49,6 +84,14 @@ export default function App() {
     setDocuments([]);
     setFolders([]);
     setTotalDocuments(0);
+    setResultTotal(0);
+    setPage(1);
+    setViewStatus('all');
+    setWorkspaceDirty(false);
+    setUploadMessage('');
+    setLibraryLoading(false);
+    setLibraryError('');
+    setError('');
     setSelectedFolderId(null);
     setSearch('');
     setDebouncedSearch('');
@@ -65,7 +108,7 @@ export default function App() {
   }, [clearSession, token]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebouncedSearch(search.trim()), 280);
+    const timeoutId = window.setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 280);
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
@@ -74,10 +117,12 @@ export default function App() {
     const requestId = ++libraryRequestIdRef.current;
     if (showLoading) setLibraryLoading(true);
     try {
-      const query = new URLSearchParams({ page: '1', limit: '100' });
+      const query = new URLSearchParams({ page: String(page), limit: '50', view_status: viewStatus });
+      query.set('sort_by', sortBy);
+      query.set('sort_order', sortOrder);
       if (selectedFolderId !== null) query.set('folder_id', String(selectedFolderId));
       if (debouncedSearch) query.set('search', debouncedSearch);
-      const rootCountRequest = selectedFolderId === null && !debouncedSearch
+      const rootCountRequest = selectedFolderId === null && !debouncedSearch && viewStatus === 'all'
         ? null
         : request('/documents?page=1&limit=1', { headers: authHeaders(token) });
       const [folderResult, documentResult, rootCountResult] = await Promise.all([
@@ -89,24 +134,27 @@ export default function App() {
       setFolders(folderResult.folders ?? []);
       setDocuments(documentResult.documents ?? []);
       setTotalDocuments(rootCountResult?.total ?? documentResult.total ?? 0);
-      setError('');
+      setResultTotal(documentResult.total ?? 0);
+      const lastPage = Math.max(1, Math.ceil((documentResult.total ?? 0) / 50));
+      if (page > lastPage) setPage(lastPage);
+      setLibraryError('');
     } catch (requestError) {
       if (requestId !== libraryRequestIdRef.current) return;
-      if (requestError.status === 401) clearSession();
-      setError(friendlyError(requestError));
+      if (requestError.status === 401) { clearSession(); setError(friendlyError(requestError)); }
+      else setLibraryError(friendlyError(requestError));
     } finally {
-      if (showLoading && requestId === libraryRequestIdRef.current) setLibraryLoading(false);
+      if (requestId === libraryRequestIdRef.current) setLibraryLoading(false);
     }
-  }, [clearSession, debouncedSearch, selectedFolderId, token]);
+  }, [clearSession, debouncedSearch, selectedFolderId, sortBy, sortOrder, token, page, viewStatus]);
 
   useEffect(() => { void loadLibrary(); }, [loadLibrary]);
 
-  const hasProcessingDocuments = documents.some((document) => document.status === 'processing');
+  const hasProcessingDocuments = documents.some((document) => document.status === 'processing' || document.status === 'uploaded');
   useEffect(() => {
-    if (!token || !hasProcessingDocuments) return undefined;
+    if (!token || (!hasProcessingDocuments && viewStatus !== 'processing' && viewStatus !== 'pending')) return undefined;
     const intervalId = window.setInterval(() => { void loadLibrary({ showLoading: false }); }, 4000);
     return () => window.clearInterval(intervalId);
-  }, [hasProcessingDocuments, loadLibrary, token]);
+  }, [hasProcessingDocuments, loadLibrary, token, viewStatus]);
 
   const runningRiskDocumentId = selectedDocument?.metadata?.risk_review?.status === 'running' ? selectedDocument.id : null;
   useEffect(() => {
@@ -125,19 +173,28 @@ export default function App() {
   }, [runningRiskDocumentId, token, clearSession]);
 
   const openDocument = useCallback(async (document) => {
+    const requestId = ++openRequestIdRef.current;
+    if (!selectedDocument) libraryPositionRef.current = { scrollY: window.scrollY, documentId: document.id };
+    setOpeningDocumentId(document.id);
     setError('');
     try {
       const fullDocument = await request(`/documents/${document.id}`, { headers: authHeaders(token) });
-      if (activeTokenRef.current !== token) return;
+      if (activeTokenRef.current !== token || requestId !== openRequestIdRef.current) return false;
       setSelectedDocument(fullDocument);
       window.scrollTo({ top: 0, behavior: 'auto' });
+      return true;
     } catch (requestError) {
+      if (activeTokenRef.current !== token || requestId !== openRequestIdRef.current) return false;
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
+      return false;
+    } finally {
+      if (requestId === openRequestIdRef.current) setOpeningDocumentId(null);
     }
-  }, [clearSession, token]);
+  }, [clearSession, token, selectedDocument?.id]);
 
   const analyzeDocument = useCallback(async (document) => {
+    if (document.has_metadata && !await confirmAction({ title:'Извлечь данные заново?', description:'Текущие исправления и подтверждение будут заменены новым результатом. Оригинал документа сохранится.', confirmLabel:'Извлечь заново' })) return;
     setError('');
     try {
       await request(`/documents/${document.id}/analyze`, { method: 'POST', headers: authHeaders(token) });
@@ -148,7 +205,7 @@ export default function App() {
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
     }
-  }, [clearSession, loadLibrary, openDocument, selectedDocument?.id, token]);
+  }, [clearSession, loadLibrary, openDocument, selectedDocument?.id, token, confirmAction]);
 
   useEffect(() => {
     for (const document of documents) {
@@ -173,7 +230,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, [clearSession, documents, selectedDocument, token]);
 
-  const waitingForInsights = Boolean(selectedDocument?.has_metadata && (!selectedDocument.metadata?.summary || !Array.isArray(selectedDocument.metadata?.risks)));
+  const waitingForInsights = Boolean(selectedDocument?.has_metadata && selectedDocument.metadata?.processing?.backend !== 'rules' && (!selectedDocument.metadata?.summary || !Array.isArray(selectedDocument.metadata?.risks)));
   useEffect(() => {
     if (!token || !selectedDocument?.id || !waitingForInsights) return undefined;
     const documentId = selectedDocument.id;
@@ -220,44 +277,47 @@ export default function App() {
   };
 
   const openOriginalFile = async (document) => {
-    const preview = window.open('', '_blank');
+    setError('');
     try {
       const response = await fetch(`${API_PREFIX}/documents/${document.id}/file`, { headers: authHeaders(token) });
       if (!response.ok) throw new ApiError('Не удалось открыть исходный файл', response.status);
       const blobUrl = URL.createObjectURL(await response.blob());
-      if (preview) preview.location.href = blobUrl;
+      const link = window.document.createElement('a');
+      link.href = blobUrl;
+      link.download = document.filename || 'document';
+      window.document.body.append(link);
+      link.click();
+      link.remove();
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (requestError) {
-      preview?.close();
       setError(friendlyError(requestError));
     }
   };
 
-  const handleUpload = async (file) => {
-    if (!file || !token) return;
-    const extension = file.name.split('.').pop()?.toLowerCase();
-    if (!['pdf', 'docx', 'jpg', 'jpeg', 'png'].includes(extension)) {
-      setError('Поддерживаются файлы PDF, DOCX, JPG и PNG.');
-      return;
-    }
-    if (file.size > 50 * 1024 * 1024) {
-      setError('Файл больше 50 МБ. Выберите документ меньшего размера.');
-      return;
-    }
+  const handleUpload = async (input) => {
+    const files = Array.isArray(input) ? input : input ? [input] : [];
+    if (!files.length || !token) return;
     setUploading(true);
     setError('');
+    setUploadMessage(`Загружаем: ${files.map(file => file.name).join(', ')}`);
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      files.forEach((file) => formData.append('files', file));
       if (selectedFolderId !== null) formData.append('folder_id', String(selectedFolderId));
-      const upload = await request('/documents', { method: 'POST', headers: authHeaders(token), body: formData });
+      const upload = await request('/documents/batch', { method: 'POST', headers: authHeaders(token), body: formData });
       if (activeTokenRef.current !== token) return;
-      autoAnalyzeIdsRef.current.add(upload.document_id);
       await loadLibrary({ showLoading: false });
-      await openDocument({ id: upload.document_id });
+      const accepted = upload.results.filter((item) => item.success);
+      setUploadMessage(`Загружено ${accepted.length} из ${files.length}. Статус обработки показан в реестре.`);
+      setPage(1);
+      setViewStatus('all');
+      if (files.length === 1 && accepted.length === 1) await openDocument({ id: accepted[0].document_id });
+      const rejected = upload.results.filter((item) => !item.success);
+      if (rejected.length) setError(rejected.map((item) => `${item.filename}: ${item.error}`).join('; '));
     } catch (requestError) {
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
+      setUploadMessage('');
     } finally {
       if (activeTokenRef.current === token) setUploading(false);
     }
@@ -275,7 +335,7 @@ export default function App() {
   };
 
   const deleteFolder = async (folder) => {
-    if (!window.confirm(`Удалить папку «${folder.name}»? Документы останутся в общем списке.`)) return;
+    if (!await confirmAction({ title:`Удалить папку «${folder.name}»?`, description:'Документы останутся в общем списке.', confirmLabel:'Удалить папку', danger:true })) return;
     try {
       await request(`/folders/${folder.id}`, { method: 'DELETE', headers: authHeaders(token) });
       if (selectedFolderId === folder.id) setSelectedFolderId(null);
@@ -295,7 +355,7 @@ export default function App() {
   };
 
   const deleteDocument = async (document) => {
-    if (!window.confirm(`Удалить «${document.filename}»? Восстановить документ не получится.`)) return;
+    if (!await confirmAction({ title:'Удалить документ?', description:`«${document.filename}» и результат обработки будут удалены без возможности восстановления.`, confirmLabel:'Удалить документ', danger:true })) return;
     try {
       await request(`/documents/${document.id}`, { method: 'DELETE', headers: authHeaders(token) });
       if (selectedDocument?.id === document.id) setSelectedDocument(null);
@@ -306,6 +366,7 @@ export default function App() {
   };
 
   const saveDocumentMetadata = async (document, fields) => {
+    setError('');
     try {
       const updated = await request(`/documents/${document.id}/metadata`, { method: 'PATCH', headers: authHeaders(token), body: JSON.stringify({ fields: fieldsForSave(fields) }) });
       if (activeTokenRef.current !== token) return;
@@ -369,23 +430,44 @@ export default function App() {
     }
   };
 
+  const leaveWorkspace = async (action) => {
+    if (workspaceDirty && !await confirmAction({title:'Есть несохранённые изменения',description:'Сохраните правку или продолжите редактирование. Если выйти сейчас, изменения этого поля потеряются.',confirmLabel:'Выйти без сохранения',cancelLabel:'Продолжить редактирование'})) return;
+    setWorkspaceDirty(false);
+    action();
+  };
+
+  const openNextDocument = async () => {
+    const result = await request('/documents?view_status=pending&limit=2', { headers: authHeaders(token) });
+    if (activeTokenRef.current !== token) return false;
+    const next = result.documents?.find(item => item.id !== selectedDocument?.id);
+    if (!next) return false;
+    if (!await openDocument(next)) throw new Error('Не удалось открыть следующий документ');
+    return true;
+  };
+
   if (!token) {
     return (
+      <>
+      {confirmationDialog}
       <main className="page-shell" id="top">
+        <a className="skip-link" href="#main-content">Перейти к содержимому</a>
         <SiteHeader />
         <AuthView authMode={authMode} authForm={authForm} loading={authLoading} error={error} onChange={updateAuthField} onSubmit={handleAuth} onToggle={() => { setAuthMode((mode) => mode === 'login' ? 'register' : 'login'); setError(''); }} />
-      </main>
+      </main></>
     );
   }
 
   return (
-    <main className="page-shell" id="top">
-      <SiteHeader user={user} onHome={() => setSelectedDocument(null)} onLogout={logout} />
+    <>
+      {confirmationDialog}
+      <main className="page-shell" id="top">
+        <a className="skip-link" href="#main-content">Перейти к содержимому</a>
+      <SiteHeader user={user} onHome={() => leaveWorkspace(() => setSelectedDocument(null))} onLogout={() => leaveWorkspace(logout)} />
       {selectedDocument ? (
-        <DocumentWorkspace document={selectedDocument} token={token} error={error} onBack={() => { setSelectedDocument(null); setError(''); }} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} onReview={updateDocumentReview} onRefreshInsights={refreshDocumentInsights} onReviewRisks={reviewDocumentRisks} />
+        <DocumentWorkspace key={selectedDocument.id} document={selectedDocument} token={token} error={error} onClearError={() => setError('')} onDirtyChange={setWorkspaceDirty} onConfirm={confirmAction} onNext={openNextDocument} onBack={() => leaveWorkspace(() => { setSelectedDocument(null); setError(''); })} onOpenFile={openOriginalFile} onAnalyze={analyzeDocument} onSaveMetadata={saveDocumentMetadata} onReview={updateDocumentReview} onRefreshInsights={refreshDocumentInsights} onReviewRisks={reviewDocumentRisks} />
       ) : (
-        <DocumentLibrary token={token} folders={folders} documents={documents} totalDocuments={totalDocuments} selectedFolderId={selectedFolderId} selectedDocumentId={selectedDocument?.id} search={search} loading={libraryLoading} uploading={uploading} error={error} onSearch={setSearch} onSelectFolder={setSelectedFolderId} onUpload={handleUpload} onCreateFolder={createFolder} onDeleteFolder={deleteFolder} onMoveDocument={moveDocument} onOpen={openDocument} onOpenFile={openOriginalFile} onDelete={deleteDocument} onAnalyze={analyzeDocument} />
+        <DocumentLibrary token={token} folders={folders} documents={documents} openingDocumentId={openingDocumentId} totalDocuments={totalDocuments} resultTotal={resultTotal} page={page} pageSize={50} onPage={setPage} viewStatus={viewStatus} onFilter={(value) => { setViewStatus(value); setPage(1); }} selectedFolderId={selectedFolderId} search={search} sortBy={sortBy} sortOrder={sortOrder} onSort={(by, order) => { setSortBy(by); setSortOrder(order); setPage(1); }} loading={libraryLoading} libraryError={libraryError} uploading={uploading} uploadMessage={uploadMessage} error={error} onDismissError={() => setError('')} onRetry={loadLibrary} onSearch={setSearch} onSelectFolder={(id) => { setSelectedFolderId(id); setPage(1); }} onUpload={handleUpload} onCreateFolder={createFolder} onDeleteFolder={deleteFolder} onMoveDocument={moveDocument} onOpen={openDocument} onOpenFile={openOriginalFile} onDelete={deleteDocument} onAnalyze={analyzeDocument} />
       )}
-    </main>
+    </main></>
   );
 }

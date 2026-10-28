@@ -112,3 +112,12 @@ def test_summary_reads_tail_before_reduction(monkeypatch):
     assert result
     assert any("ПОСЛЕДНЕЕ УСЛОВИЕ" in prompt for prompt in prompts)
     assert "Заметки по фрагментам" in prompts[-1]
+
+
+def test_model_cannot_bypass_currency_grounding_by_claiming_manual_method():
+    from src.extraction.validation import validate_model_result
+    result = validate_model_result({'total_amount': {'value': 1200, 'currency': 'USD',
+        'evidence': 'Общая сумма договора 1200.', 'method': 'manual'}},
+        'Общая сумма договора 1200.')
+    assert result['total_amount']['currency'] is None
+    assert result['total_amount']['method'] != 'manual'

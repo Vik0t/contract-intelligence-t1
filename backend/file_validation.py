@@ -14,7 +14,7 @@ class UploadValidationError(ValueError):
     """Raised when an uploaded document is unsafe or unsupported."""
 
 
-def validate_document_file(path: str | Path, extension: str, *, max_pdf_pages: int) -> None:
+def validate_document_file(path: str | Path, extension: str, *, max_pdf_pages: int, allow_ocr: bool = False) -> None:
     """Validate the file signature and basic document limits before persistence."""
     document_path = Path(path)
     if not document_path.is_file() or document_path.stat().st_size == 0:
@@ -29,10 +29,14 @@ def validate_document_file(path: str | Path, extension: str, *, max_pdf_pages: i
             raise UploadValidationError("Файл не является корректным PDF")
         try:
             with pymupdf.open(document_path) as pdf:
+                if pdf.needs_pass:
+                    raise UploadValidationError("PDF защищён паролем. Загрузите незашифрованную копию")
                 if len(pdf) > max_pdf_pages:
                     raise UploadValidationError(
                         f"PDF содержит слишком много страниц: максимум {max_pdf_pages}"
                     )
+                if not allow_ocr and not any(page.get_text().strip() for page in pdf):
+                    raise UploadValidationError("PDF не содержит извлекаемого текста. Загрузите PDF с текстовым слоем")
         except UploadValidationError:
             raise
         except Exception as exc:
@@ -47,6 +51,13 @@ def validate_document_file(path: str | Path, extension: str, *, max_pdf_pages: i
                 names = set(archive.namelist())
                 if "[Content_Types].xml" not in names or "word/document.xml" not in names:
                     raise UploadValidationError("DOCX не содержит основной документ")
+                if archive.testzip() is not None:
+                    raise UploadValidationError("DOCX повреждён")
+            from src.parsing import parse_docx, document_ir_to_text
+            try:
+                document_ir_to_text(parse_docx(document_path))
+            except ValueError as exc:
+                raise UploadValidationError("DOCX не содержит извлекаемого текста") from exc
         except UploadValidationError:
             raise
         except Exception as exc:

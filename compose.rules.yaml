@@ -1,0 +1,18 @@
+# CPU baseline for the four required attributes. No model weights or external API.
+services:
+  backend:
+    image: contract-intelligence-backend:pmi-rules-v1
+    build:
+      args:
+        RUNTIME_IMAGE: ubuntu:24.04
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    gpus: !reset []
+    environment:
+      DELIVERY_PROFILE: pmi-rules-v1
+      EXTRACTION_BACKEND: rules
+      ML_ALLOW_EXTERNAL: "false"
+      SUMMARY_BACKEND: local
+      RISK_BACKEND: local
+      DOCX_USE_RENDERED_PAGES: "false"
+      ALLOW_OCR_UPLOADS: "false"
+      AUTO_EXTRACT_UPLOADS: "true"

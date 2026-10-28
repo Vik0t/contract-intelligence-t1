@@ -5,11 +5,14 @@ import importlib.util
 import logging
 import os
 import platform
+from pathlib import Path
+import re
 from typing import Any
 
 from dotenv import load_dotenv
 import torch
 from transformers import AutoModelForMultimodalLM, AutoProcessor, BitsAndBytesConfig
+from src.extraction.provenance import model_identity
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -78,6 +81,17 @@ class ExtractionStats:
 
 # Global stats collector
 _stats_collector = ExtractionStats()
+_loaded_model_provenance: dict[str, Any] = {}
+
+
+def get_loaded_model_provenance() -> dict[str, Any]:
+    return dict(_loaded_model_provenance) if load_model.cache_info().currsize else {}
+
+
+def _snapshot_revision(path: Path) -> str | None:
+    if path.parent.name == 'snapshots' and re.fullmatch(r'[0-9a-f]{40}', path.name):
+        return path.name
+    return None
 
 
 def get_extraction_stats() -> dict:
@@ -108,10 +122,26 @@ def _count_tokens_mlx(tokenizer, text: str) -> int:
 @lru_cache(maxsize=1)
 def load_model() -> tuple[Any, Any]:
     """Загружает модель один раз на процесс."""
+    _loaded_model_provenance.clear()
     if use_mlx():
         from mlx_lm import load as mlx_load
+        from huggingface_hub import snapshot_download
 
-        model, tokenizer = mlx_load(os.getenv("CONTRACT_MLX_MODEL_ID", "numind/NuExtract3-mlx-8bits"))
+        model_id = os.getenv('CONTRACT_MLX_MODEL_ID', 'numind/NuExtract3-mlx-8bits')
+        revision = os.getenv('CONTRACT_MLX_MODEL_REVISION') or None
+        model_path = Path(model_id).expanduser()
+        if not model_path.is_dir():
+            # Match mlx-lm's supported files, resolve the ref once, and load
+            # that immutable snapshot so provenance cannot race a moved ref.
+            model_path = Path(snapshot_download(model_id, revision=revision, allow_patterns=[
+                '*.json', 'model*.safetensors', '*.py', 'tokenizer.model',
+                '*.tiktoken', 'tiktoken.model', '*.txt', '*.jsonl', '*.jinja',
+            ]))
+        model_path = model_path.resolve()
+        model, tokenizer = mlx_load(str(model_path))
+        resolved = _snapshot_revision(model_path)
+        _loaded_model_provenance.update(model_identity(model_id, 'mlx', resolved,
+            revision_source='snapshot' if resolved else 'unknown', requested_revision=revision))
         return model, tokenizer
 
     revision = os.getenv("CONTRACT_MODEL_REVISION") or None
@@ -186,6 +216,18 @@ def load_model() -> tuple[Any, Any]:
             "low_cpu_mem_usage": True,
         }
         model = AutoModelForMultimodalLM.from_pretrained(MODEL_ID, **fallback_kwargs).eval()
+    config = getattr(model, 'config', None)
+    resolved = getattr(config, '_commit_hash', None)
+    local_path = Path(MODEL_ID).expanduser()
+    source = 'model_config'
+    if local_path.is_dir():
+        resolved = _snapshot_revision(local_path.resolve())
+        source = 'snapshot'
+    elif not resolved and revision and re.fullmatch(r'[0-9a-f]{40}', revision):
+        resolved = revision
+        source = 'requested_commit'
+    _loaded_model_provenance.update(model_identity(MODEL_ID, 'transformers', resolved,
+        revision_source=source if resolved else 'unknown', requested_revision=revision))
     return processor, model
 
 
@@ -193,4 +235,5 @@ def unload_model() -> None:
     from src.extraction.runtime import MODEL_LOCK, release_device_memory
     with MODEL_LOCK:
         load_model.cache_clear()
+        _loaded_model_provenance.clear()
         release_device_memory()

@@ -46,6 +46,9 @@ class ExtractionService:
         collect_stats: bool = True,
     ) -> tuple[dict[str, Any], dict[str, int]]:
         """Extract contract fields using the configured runtime backend."""
+        if self.settings.extraction_backend == 'rules':
+            from src.extraction.rules import extract_with_rules
+            return extract_with_rules(text, document_ir)
         if self.settings.extraction_backend == "local":
             with MODEL_LOCK:
                 if not keep_models_loaded():

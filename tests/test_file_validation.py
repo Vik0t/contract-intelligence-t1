@@ -11,6 +11,7 @@ def test_pdf_signature_and_page_limit(tmp_path: Path) -> None:
     path = tmp_path / "document.pdf"
     pdf = pymupdf.open()
     pdf.new_page()
+    pdf[0].insert_text((72, 72), "Contract 42")
     pdf.save(path)
     pdf.close()
 

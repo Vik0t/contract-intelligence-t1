@@ -1,192 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { authHeaders, request, requestBlob } from '../api.js';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { authHeaders, friendlyError, request, requestBlob } from '../api.js';
 import RiskReviewPanel from './RiskReviewPanel.jsx';
-import {
-  cloneFields,
-  FIELD_ORDER,
-  fieldLabels,
-  fieldNeedsReview,
-  fieldsToPlainObject,
-  fieldValueForEdit,
-  formatDate,
-  formatFieldValue,
-  getFieldEvidence,
-  getFieldPage,
-  getFieldValue,
-  isStructuredField,
-  updateFieldValue,
-} from '../contractFields.js';
+import ActionMenu from './ActionMenu.jsx';
+import { FieldRow, MetadataEditor, orderedEntries } from './ContractFields.jsx';
+import { cloneFields, fieldLabels, fieldNeedsReview, fieldsToPlainObject, formatDate, formatFieldValue, getFieldValue } from '../contractFields.js';
 
-function orderedEntries(fields) {
-  const keys = [...FIELD_ORDER, ...Object.keys(fields ?? {}).filter((key) => !FIELD_ORDER.includes(key))];
-  return keys.filter((key) => Object.hasOwn(fields ?? {}, key)).map((key) => [key, fields[key]]);
-}
-
-function partyEvidence(party) {
-  return party?.name_evidence || party?.inn_evidence || null;
-}
-
-function partyPage(party) {
-  return party?.name_page_number ?? party?.inn_page_number ?? null;
-}
-
-function SourceButton({ evidence, page, onSelect }) {
-  if (!evidence) return <span className="source-missing">Источник не найден</span>;
-  return (
-    <button className="source-button" type="button" onClick={() => onSelect({ evidence, page })}>
-      Показать в документе{page ? ` · стр. ${page}` : ''}
-    </button>
-  );
-}
-
-function PartiesValue({ parties, onSelectSource }) {
-  if (!Array.isArray(parties) || !parties.length) return <span className="missing-value">Не найдены</span>;
-  return (
-    <div className="party-list">
-      {parties.map((party, index) => (
-        <div className="party-row" key={`${party.inn ?? party.name ?? index}`}>
-          <div><strong>{party.name || 'Название не найдено'}</strong><span>{party.role || 'Роль не определена'}</span></div>
-          <span>{party.inn ? `ИНН ${party.inn}` : 'ИНН не найден'}</span>
-          <SourceButton evidence={partyEvidence(party)} page={partyPage(party)} onSelect={onSelectSource} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FieldRow({ fieldKey, field, active, reviewed, onSelectSource, onCopy }) {
-  const evidence = getFieldEvidence(fieldKey, field);
-  const page = getFieldPage(fieldKey, field);
-  const needsReview = fieldNeedsReview(fieldKey, field);
-  const value = getFieldValue(fieldKey, field);
-  return (
-    <section className={`field-row${active ? ' is-active' : ''}`}>
-      <div className="field-row-heading">
-        <span>{fieldLabels[fieldKey] ?? fieldKey.replaceAll('_', ' ')}</span>
-        {needsReview && !reviewed ? <strong className="review-flag">Стоит проверить</strong> : <strong className="verified-flag">{needsReview ? 'Проверено оператором' : 'Источник найден'}</strong>}
-      </div>
-      <div className="field-row-value">
-        {fieldKey === 'parties' ? <PartiesValue parties={value} onSelectSource={(source) => onSelectSource({ ...source, fieldKey })} /> : <span className={value === null || value === undefined || value === '' ? 'missing-value' : ''}>{formatFieldValue(fieldKey, field)}</span>}
-        {fieldKey !== 'parties' ? <button className="copy-field" type="button" onClick={() => onCopy(formatFieldValue(fieldKey, field), fieldLabels[fieldKey])} aria-label={`Копировать: ${fieldLabels[fieldKey] ?? fieldKey}`}>Копировать</button> : null}
-      </div>
-      {fieldKey !== 'parties' ? (
-        <div className="field-source">
-          <SourceButton evidence={evidence} page={page} onSelect={(source) => onSelectSource({ ...source, fieldKey })} />
-          {active && evidence ? <blockquote>{evidence}</blockquote> : null}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function MetadataEditor({ fields, onChange }) {
-  const updateParty = (index, name, value) => {
-    const next = cloneFields(fields);
-    const structured = isStructuredField(next.parties);
-    const parties = structured ? [...(next.parties.value ?? [])] : [...(next.parties ?? [])];
-    parties[index] = { ...(parties[index] ?? {}), [name]: value };
-    if (name === 'inn') {
-      parties[index].inn_evidence = null;
-      parties[index].inn_page_number = null;
-    } else {
-      parties[index].name_evidence = null;
-      parties[index].name_page_number = null;
-    }
-    if (structured) next.parties.value = parties;
-    else next.parties = parties;
-    onChange(next);
-  };
-  const addParty = () => {
-    const next = cloneFields(fields);
-    const structured = isStructuredField(next.parties);
-    const parties = structured ? [...(next.parties.value ?? [])] : [...(next.parties ?? [])];
-    parties.push({ name: '', role: '', inn: '' });
-    if (structured) next.parties.value = parties;
-    else next.parties = parties;
-    onChange(next);
-  };
-  const removeParty = (index) => {
-    const next = cloneFields(fields);
-    const structured = isStructuredField(next.parties);
-    const parties = (structured ? next.parties.value ?? [] : next.parties ?? []).filter((_, itemIndex) => itemIndex !== index);
-    if (structured) next.parties.value = parties;
-    else next.parties = parties;
-    onChange(next);
-  };
-
-  return (
-    <div className="metadata-editor">
-      {orderedEntries(fields).map(([key, field]) => {
-        if (key === 'parties') {
-          const parties = fieldValueForEdit(key, field);
-          return (
-            <fieldset className="editor-fieldset" key={key}>
-              <legend>{fieldLabels[key]}</legend>
-              {(parties.length ? parties : [{ name: '', role: '', inn: '' }]).map((party, index) => (
-                <div className="party-editor-row" key={index}>
-                  <label>Сторона<input value={party.name ?? ''} onChange={(event) => updateParty(index, 'name', event.target.value)} /></label>
-                  <label>Роль<input value={party.role ?? ''} onChange={(event) => updateParty(index, 'role', event.target.value)} /></label>
-                  <label>ИНН<input inputMode="numeric" value={party.inn ?? ''} onChange={(event) => updateParty(index, 'inn', event.target.value)} /></label>
-                  <button className="text-button danger-link" type="button" onClick={() => removeParty(index)}>Удалить сторону</button>
-                </div>
-              ))}
-              <button className="text-button" type="button" onClick={addParty}>+ Добавить сторону</button>
-            </fieldset>
-          );
-        }
-        if (key === 'total_amount' && isStructuredField(field)) {
-          return (
-            <fieldset className="editor-fieldset" key={key}>
-              <legend>Общая сумма</legend>
-              <label className="editor-field">Сумма<input inputMode="decimal" value={field.value ?? ''} onChange={(event) => onChange(updateFieldValue(fields, key, event.target.value))} /></label>
-              <label className="editor-field">Валюта<input value={field.currency ?? ''} maxLength={3} placeholder="RUB" list="contract-currencies" onChange={(event) => {
-                const next = cloneFields(fields);
-                next.total_amount = { ...next.total_amount, currency: event.target.value.toUpperCase(), evidence: null, page_number: null };
-                onChange(next);
-              }} /></label>
-              <datalist id="contract-currencies"><option value="RUB">Рубли</option><option value="USD">Доллары США</option><option value="EUR">Евро</option><option value="CNY">Юани</option><option value="KZT">Тенге</option><option value="BYN">Белорусские рубли</option></datalist>
-              <span className="field-hint">Код из трёх букв: RUB — рубли, USD — доллары, EUR — евро.</span>
-            </fieldset>
-          );
-        }
-        if (key === 'vat' && isStructuredField(field)) {
-          const updateVat = (name, value) => {
-            const next = cloneFields(fields);
-            next.vat = { ...next.vat, [name]: value, evidence: null, page_number: null, raw_value: null };
-            if (name === 'mode' && value === 'not_subject') next.vat.rate = null;
-            onChange(next);
-          };
-          return (
-            <fieldset className="editor-fieldset" key={key}>
-              <legend>НДС</legend>
-              <label className="editor-field">Условие
-                <select value={field.mode ?? 'not_stated'} onChange={(event) => updateVat('mode', event.target.value)}>
-                  <option value="included">Включён в сумму</option>
-                  <option value="excluded">Начисляется сверх суммы</option>
-                  <option value="not_subject">Не облагается</option>
-                  <option value="not_stated">Не указан</option>
-                </select>
-              </label>
-              <label className="editor-field">Ставка, %<input inputMode="decimal" value={field.rate ?? ''} disabled={field.mode === 'not_subject'} onChange={(event) => updateVat('rate', event.target.value)} /></label>
-            </fieldset>
-          );
-        }
-        const value = fieldValueForEdit(key, field);
-        const simple = typeof value !== 'object' || value === null;
-        return (
-          <label className="editor-field" key={key} htmlFor={`metadata-${key}`}>
-            {fieldLabels[key] ?? key}
-            {simple ? (
-              <input id={`metadata-${key}`} type={key === 'contract_date' || key === 'term' ? 'date' : 'text'} value={value ?? ''} onChange={(event) => onChange(updateFieldValue(fields, key, event.target.value))} />
-            ) : (
-              <textarea id={`metadata-${key}`} rows={5} value={JSON.stringify(value, null, 2)} readOnly aria-describedby={`metadata-${key}-hint`} />
-            )}
-            {!simple ? <span id={`metadata-${key}-hint`} className="field-hint">Сложное значение пока доступно только для просмотра.</span> : null}
-          </label>
-        );
-      })}
-    </div>
-  );
+function scrollToSource(node) {
+  const panel = node?.closest('.document-panel');
+  if (!panel) return;
+  const bounds = panel.getBoundingClientRect();
+  const target = node.getBoundingClientRect();
+  panel.scrollTo({
+    top: Math.max(0, panel.scrollTop + target.top - bounds.top - (panel.clientHeight - target.height) / 2),
+    left: Math.max(0, panel.scrollLeft + target.left - bounds.left - (panel.clientWidth - target.width) / 2),
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+  });
 }
 
 function highlightEvidence(text, evidence) {
@@ -198,26 +26,30 @@ function highlightEvidence(text, evidence) {
 
 function DocumentPhoto({ document, token }) {
   const [imageUrl, setImageUrl] = useState('');
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     let objectUrl = '';
     setImageUrl('');
+    setFailed(false);
     requestBlob(`/documents/${document.id}/file`, token, controller.signal)
       .then((blob) => {
         objectUrl = URL.createObjectURL(blob);
         setImageUrl(objectUrl);
       })
       .catch((requestError) => {
-        if (requestError.name !== 'AbortError' && !controller.signal.aborted) setImageUrl('');
+        if (requestError.name !== 'AbortError' && !controller.signal.aborted) setFailed(true);
       });
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [document.id, token]);
+  }, [document.id, token, attempt]);
 
+  if (failed) return <div className="photo-loading" role="alert"><p>Не удалось открыть фотографию.</p><button className="secondary-button" type="button" onClick={() => setAttempt(value => value+1)}>Повторить</button></div>;
   if (!imageUrl) return <div className="photo-loading">Открываем фотографию…</div>;
-  return <img className="document-photo" src={imageUrl} alt={`Фотография документа ${document.filename || ''}`} />;
+  return <img className="document-photo" src={imageUrl} onError={() => { setImageUrl(''); setFailed(true); }} alt={`Фотография документа ${document.filename || ''}`} />;
 }
 
 function RenderedPage({ documentId, number, token, location, onPageRef }) {
@@ -227,6 +59,7 @@ function RenderedPage({ documentId, number, token, location, onPageRef }) {
   const [imageUrl, setImageUrl] = useState('');
   const [imageLoaded, setImageLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const observer = new IntersectionObserver(([entry]) => {
@@ -241,6 +74,9 @@ function RenderedPage({ documentId, number, token, location, onPageRef }) {
 
   useEffect(() => {
     if (!visible) return undefined;
+    setFailed(false);
+    setImageUrl('');
+    setImageLoaded(false);
     const controller = new AbortController();
     let url = '';
     requestBlob(`/documents/${documentId}/pages/${number}/image`, token, controller.signal)
@@ -255,11 +91,11 @@ function RenderedPage({ documentId, number, token, location, onPageRef }) {
       controller.abort();
       if (url) URL.revokeObjectURL(url);
     };
-  }, [documentId, number, token, visible]);
+  }, [documentId, number, token, visible, attempt]);
 
   useEffect(() => {
     if (!location || !imageLoaded || !markRef.current) return;
-    const frame = requestAnimationFrame(() => markRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' }));
+    const frame = requestAnimationFrame(() => scrollToSource(markRef.current));
     return () => cancelAnimationFrame(frame);
   }, [imageLoaded, location]);
 
@@ -267,7 +103,7 @@ function RenderedPage({ documentId, number, token, location, onPageRef }) {
     <article className="document-page rendered-page" ref={(node) => { pageRef.current = node; onPageRef(number, node); }}>
       <div className="page-number">Страница {number}</div>
       <div className="rendered-page-canvas">
-        {imageUrl ? <img src={imageUrl} onLoad={() => setImageLoaded(true)} alt={`Страница ${number} исходного документа`} /> : <div className="rendered-page-placeholder">{failed ? 'Не удалось показать страницу' : 'Открываем страницу…'}</div>}
+        {imageUrl ? <img src={imageUrl} onLoad={() => setImageLoaded(true)} onError={() => { setImageUrl(''); setImageLoaded(false); setFailed(true); }} alt={`Страница ${number} исходного документа`} /> : <div className="rendered-page-placeholder">{failed ? <div role="alert"><p>Не удалось показать страницу.</p><button className="secondary-button" type="button" onClick={() => setAttempt(value => value+1)}>Повторить</button></div> : 'Открываем страницу…'}</div>}
         {imageUrl && location?.rects?.map((rect, index) => (
           <mark
             key={index}
@@ -282,11 +118,11 @@ function RenderedPage({ documentId, number, token, location, onPageRef }) {
   );
 }
 
-function DocumentPages({ content, document, loading, selectedSource, location, token }) {
+function DocumentPages({ content, document, loading, selectedSource, location, token, onRetry, onOpenFile }) {
   const pageRefs = useRef(new Map());
   useEffect(() => {
     if (location?.page) {
-      pageRefs.current.get(location.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      scrollToSource(pageRefs.current.get(location.page));
       return;
     }
     if (!selectedSource || content?.visual_page_count) return;
@@ -294,12 +130,12 @@ function DocumentPages({ content, document, loading, selectedSource, location, t
     if (!page) return;
     if (content?.source_format === 'image') page.querySelector('.photo-transcript')?.setAttribute('open', '');
     requestAnimationFrame(() => {
-      (page.querySelector('[data-evidence]') || page).scrollIntoView({ behavior: 'smooth', block: 'center' });
+      scrollToSource(page.querySelector('[data-evidence]') || page);
     });
   }, [selectedSource, content, location]);
 
   if (loading) return <div className="document-loading">Открываем текст документа…</div>;
-  if (!content?.pages?.length) return <div className="document-loading">Текст для просмотра недоступен. Откройте оригинал документа.</div>;
+  if (!content?.pages?.length) return <div className="document-loading" role="alert"><p>Не удалось открыть документ для просмотра.</p><div className="processing-actions"><button className="secondary-button" type="button" onClick={onRetry}>Повторить</button>{document.has_file ? <button className="text-button" type="button" onClick={() => onOpenFile(document)}>Скачать оригинал</button> : null}</div></div>;
   if (content.visual_page_count) {
     return (
       <div className="document-pages visual-document-pages">
@@ -366,15 +202,20 @@ function SummaryPanel({ fields, summary, onRefresh, refreshing, insightError }) 
         <>
           <p className="summary-intro">{derived.intro}</p>
           <dl>{derived.facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-          <p className="panel-note">Автоматическая сводка недоступна — показана сводка по извлечённым полям.</p>
+          <p className="panel-note">Сводка ещё не создана. Показаны реквизиты договора.</p>
         </>
       )}
     </div>
   );
 }
 
-export default function DocumentWorkspace({ document, token, error, onBack, onOpenFile, onAnalyze, onSaveMetadata, onReview, onRefreshInsights, onReviewRisks }) {
+export default function DocumentWorkspace({ document, token, error, onClearError, onBack, onNext, onDirtyChange, onConfirm, onOpenFile, onAnalyze, onSaveMetadata, onReview, onRefreshInsights, onReviewRisks }) {
   const [activeTab, setActiveTab] = useState('fields');
+  const [fieldFilter, setFieldFilter] = useState('all');
+  const [mobilePane, setMobilePane] = useState('review');
+  const [zoom, setZoom] = useState(1);
+  const [nextLoading, setNextLoading] = useState(false);
+  const [queueEmpty, setQueueEmpty] = useState(false);
   const [selectedSource, setSelectedSource] = useState(null);
   const [sourceLocation, setSourceLocation] = useState(null);
   const [sourceError, setSourceError] = useState('');
@@ -382,19 +223,47 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
   const [insightError, setInsightError] = useState('');
   const [content, setContent] = useState(null);
   const [contentLoading, setContentLoading] = useState(true);
+  const [contentAttempt, setContentAttempt] = useState(0);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const [draftFields, setDraftFields] = useState(() => cloneFields(document.metadata?.fields));
   const [notice, setNotice] = useState('');
   const noticeTimeoutRef = useRef(null);
+  const reviewContentRef = useRef(null);
+  useLayoutEffect(() => {
+    reviewContentRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+  }, [activeTab]);
   const fields = document.metadata?.fields ?? {};
   const reviewCount = useMemo(() => document.review_status === 'reviewed' ? 0 : orderedEntries(fields).filter(([key, field]) => fieldNeedsReview(key, field)).length, [fields, document.review_status]);
   const riskCount = document.metadata?.risk_review?.status === 'complete' ? document.metadata.risk_review.findings.length : 0;
+  const dirty = Boolean(editing && JSON.stringify(draftFields) !== JSON.stringify(fields));
+  const isProcessing = document.status === 'processing' || document.status === 'uploaded';
+  const selectSource = (source) => { setSelectedSource(source); setMobilePane('document'); };
+  const startEditing = (key) => { onClearError(); setEditError(''); setDraftFields(cloneFields(fields)); setActiveTab('fields'); setEditing(key); setMobilePane('review'); };
+  const updateDraft = (next) => { setDraftFields(next); setEditError(''); };
+  const cancelEditing = async () => {
+    if (!dirty || await onConfirm({title:'Отменить изменения?',description:'Правки этого поля не будут сохранены.',confirmLabel:'Отменить изменения',cancelLabel:'Продолжить редактирование'})) { onClearError(); setEditError(''); setEditing(false); setDraftFields(cloneFields(fields)); }
+  };
+  useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false); }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = event => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
 
   useEffect(() => {
     setEditing(false);
   }, [document.id]);
+
+  useEffect(() => {
+    if (!editing) return undefined;
+    const frame = requestAnimationFrame(() => window.document.querySelector('.inline-editor input, .inline-editor select')?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [editing]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -404,7 +273,7 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
       .catch((requestError) => { if (requestError.name !== 'AbortError') setContent(null); })
       .finally(() => { if (!controller.signal.aborted) setContentLoading(false); });
     return () => controller.abort();
-  }, [document.has_metadata, document.id, document.status, token]);
+  }, [document.has_metadata, document.id, document.status, token, contentAttempt]);
 
   useEffect(() => {
     setSourceLocation(null);
@@ -458,12 +327,16 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
   };
   const saveMetadata = async () => {
     setSaving(true);
+    setEditError('');
     try {
       await onSaveMetadata(document, draftFields);
+      setSelectedSource(null);
+      setSourceLocation(null);
+      setSourceError('');
       setEditing(false);
       showNotice('Изменения сохранены');
-    } catch {
-      // The parent displays the actionable request error.
+    } catch (requestError) {
+      setEditError(friendlyError(requestError));
     } finally {
       setSaving(false);
     }
@@ -497,69 +370,83 @@ export default function DocumentWorkspace({ document, token, error, onBack, onOp
 
   const hasMetadata = document.has_metadata && document.metadata?.fields;
   const canStartAnalysis = document.status === 'ready' || document.status === 'failed';
+  const isReviewed = document.review_status === 'reviewed';
+  const fieldGroups = [
+    ['Реквизиты', ['contract_number', 'contract_date', 'contract_type', 'place']],
+    ['Стороны', ['parties']],
+    ['Условия', ['total_amount', 'vat', 'term']],
+    ['Другие сведения', orderedEntries(fields).map(([key]) => key).filter(key => !['contract_number','contract_date','contract_type','place','parties','total_amount','vat','term'].includes(key))],
+  ];
+  const nextDocument = async () => {
+    setNextLoading(true);
+    try {
+      if (!await onNext()) { setQueueEmpty(true); showNotice('Договоров, готовых к проверке, больше нет'); }
+    } catch { showNotice('Не удалось открыть следующий документ. Попробуйте ещё раз.'); }
+    finally { setNextLoading(false); }
+  };
+  const repeatAnalysis = () => {
+    onAnalyze(document);
+  };
   return (
-    <section className="workspace-shell">
+    <section className="workspace-shell" id="main-content" tabIndex={-1}>
       <header className="workspace-header">
-        <button className="back-button" type="button" onClick={() => { if (!editing || window.confirm('Есть несохранённые изменения. Вернуться к списку без сохранения?')) onBack(); }}><span aria-hidden="true">←</span> К списку договоров</button>
-        <div className="workspace-titlebar">
-          <div className="workspace-title">
-            <p className="eyebrow">Проверка договора</p>
-            <h1>{document.filename || 'Документ'}</h1>
-            <p className="workspace-meta">Добавлен {formatDate(document.created_at)}</p>
-          </div>
+        <div className="workspace-navigation"><button className="back-button" type="button" onClick={onBack}><span aria-hidden="true">←</span> Назад к списку</button><span className="workspace-file-type">{document.filename?.split('.').pop()?.toUpperCase()}</span><span className="workspace-meta">Добавлен {formatDate(document.created_at)}</span></div>
+        <div className="workspace-titlebar"><div className="workspace-title"><h1 title={document.filename || 'Документ'}>{document.filename || 'Документ'}</h1></div>
           <div className="workspace-actions">
-            {hasMetadata && !editing ? <button className="secondary-button" type="button" onClick={copyAll}>Копировать всё</button> : null}
-            {hasMetadata && !editing ? <button className="secondary-button" type="button" onClick={exportJson}>Скачать JSON</button> : null}
-            {document.has_file ? <button className="secondary-button" type="button" onClick={() => onOpenFile(document)}>Открыть оригинал</button> : null}
-            {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" onClick={() => { setDraftFields(cloneFields(fields)); setActiveTab('fields'); setEditing(true); }}>Редактировать</button> : null}
-            {hasMetadata && !editing && document.review_status !== 'reviewed' ? <button className="primary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить поля'}</button> : null}
-            {hasMetadata && !editing && document.review_status === 'reviewed' ? <button className="secondary-button compact-button" type="button" disabled={reviewing} onClick={() => updateReview(false)}>Вернуть поля на проверку</button> : null}
-            {editing ? <button className="secondary-button" type="button" onClick={() => { setEditing(false); setDraftFields(cloneFields(fields)); }}>Отменить</button> : null}
-            {editing ? <button className="primary-button compact-button" type="button" disabled={saving} onClick={saveMetadata}>{saving ? 'Сохраняем…' : 'Сохранить'}</button> : null}
+            {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" aria-label="Скачать JSON" onClick={exportJson}>Скачать JSON <span aria-hidden="true">↓</span></button> : null}
+            <ActionMenu label="Другие действия с договором">
+              {document.has_file ? <button type="button" onClick={() => onOpenFile(document)}>Скачать оригинал</button> : null}
+              {hasMetadata && !editing ? <><button type="button" onClick={copyAll}>Копировать все данные</button><button type="button" disabled={isProcessing} onClick={() => startEditing('all')}>Редактировать все поля</button><button type="button" disabled={isProcessing} onClick={repeatAnalysis}>Извлечь заново…</button>{isReviewed ? <button type="button" disabled={reviewing || isProcessing} onClick={() => updateReview(false)}>Вернуть на проверку</button> : null}</> : null}
+            </ActionMenu>
           </div>
         </div>
       </header>
       {notice ? <div className="toast" role="status">{notice}</div> : null}
-      {error ? <p className="error" role="alert">{error}</p> : null}
-
-      {hasMetadata ? (
-        <div className={`review-state${document.review_status === 'reviewed' ? ' is-reviewed' : ''}`}>
-          <span aria-hidden="true" />
-          <strong>{document.review_status === 'reviewed' ? 'Поля проверены оператором' : 'Поля ожидают проверки оператора'}</strong>
-          {document.review_status === 'reviewed' && document.reviewed_at ? <time dateTime={document.reviewed_at}>{new Date(document.reviewed_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })}</time> : <small>Проверьте сомнительные значения и подтвердите результат.</small>}
-        </div>
-      ) : null}
-
-      {!hasMetadata ? (
-        <div className={`processing-state is-${document.status}`}>
-          <div className="processing-line" />
-          <strong>{document.status === 'processing' ? 'Извлекаем данные из договора…' : document.status === 'failed' ? 'Не удалось обработать документ' : 'Документ готов к анализу'}</strong>
-          <span>{document.processing_error || (document.status === 'processing' ? 'Можно вернуться в библиотеку — обработка продолжится в фоне.' : 'Запустите анализ, чтобы получить ключевые условия.')}</span>
-          {canStartAnalysis ? <button className="primary-button" type="button" onClick={() => onAnalyze(document)}>{document.status === 'failed' ? 'Повторить анализ' : 'Начать анализ'}</button> : null}
-        </div>
-      ) : (
-        <div className="workspace-grid">
-          <aside className="review-panel">
+      {error && !editing ? <p className="error" role="alert">{error}</p> : null}
+      {hasMetadata ? <div className={`review-state${isReviewed ? ' is-reviewed' : ''}`} role="status"><span aria-hidden="true" />
+        <strong>{isProcessing ? 'Извлекаем данные заново…' : isReviewed ? 'Реквизиты проверены' : 'Реквизиты на проверке'}</strong>
+        {isReviewed && document.reviewed_at && !isProcessing ? <time dateTime={document.reviewed_at}>{new Date(document.reviewed_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })}</time> : reviewCount && !isProcessing ? <small>Требуют внимания: {reviewCount}</small> : null}
+      </div> : null}
+      {!hasMetadata ? <div className={`processing-state is-${document.status}`} role="status"><div className="processing-line" />
+        <strong>{isProcessing ? 'Извлекаем данные из договора…' : document.status === 'failed' ? 'Не удалось обработать документ' : 'Документ загружен'}</strong>
+        <span>{document.processing_error || (isProcessing ? 'Можно вернуться к списку. Обработка продолжится, результат сохранится.' : 'Запустите обработку, чтобы получить реквизиты и условия договора.')}</span>
+        <div className="processing-actions">{canStartAnalysis ? <button className="primary-button" type="button" onClick={() => onAnalyze(document)}>{document.status === 'failed' ? 'Повторить обработку' : 'Извлечь данные'}</button> : null}<button className="secondary-button" type="button" onClick={onBack}>К списку документов</button></div>
+      </div> : <>
+        <nav className="mobile-pane-switch" aria-label="Разделы договора">
+          <button type="button" aria-pressed={mobilePane === 'review' && activeTab === 'fields'} onClick={() => { setMobilePane('review'); setActiveTab('fields'); }}>Реквизиты{reviewCount ? <span>{reviewCount}</span> : null}</button>
+          {document.metadata?.processing?.backend !== 'rules' ? <><button type="button" disabled={Boolean(editing)} aria-pressed={mobilePane === 'review' && activeTab === 'summary'} onClick={() => { setMobilePane('review'); setActiveTab('summary'); }}>Сводка</button><button type="button" disabled={Boolean(editing)} aria-pressed={mobilePane === 'review' && activeTab === 'risks'} onClick={() => { setMobilePane('review'); setActiveTab('risks'); }}>Риски{riskCount ? <span>{riskCount}</span> : null}</button></> : null}
+          <button type="button" aria-pressed={mobilePane === 'document'} onClick={() => setMobilePane('document')}>Документ</button>
+        </nav>
+        <div className={`workspace-grid show-${mobilePane}`}>
+          <aside className="review-panel" aria-label="Данные договора">
             <nav className="workspace-tabs" aria-label="Разделы анализа">
-              <button type="button" aria-pressed={activeTab === 'fields'} className={activeTab === 'fields' ? 'is-active' : ''} onClick={() => setActiveTab('fields')}>Поля{reviewCount ? <span>{reviewCount} проверить</span> : null}</button>
-              <button type="button" aria-pressed={activeTab === 'summary'} className={activeTab === 'summary' ? 'is-active' : ''} onClick={() => setActiveTab('summary')}>Кратко</button>
-              <button type="button" aria-pressed={activeTab === 'risks'} className={activeTab === 'risks' ? 'is-active' : ''} onClick={() => setActiveTab('risks')}>Риски{riskCount ? <span>{riskCount}</span> : null}</button>
+              <button type="button" disabled={Boolean(editing)} aria-pressed={activeTab === 'fields'} className={activeTab === 'fields' ? 'is-active' : ''} onClick={() => setActiveTab('fields')}>Реквизиты{reviewCount ? <span>{reviewCount}</span> : null}</button>
+              {document.metadata?.processing?.backend !== 'rules' ? <><button type="button" disabled={Boolean(editing)} aria-pressed={activeTab === 'summary'} className={activeTab === 'summary' ? 'is-active' : ''} onClick={() => setActiveTab('summary')}>Сводка</button><button type="button" disabled={Boolean(editing)} aria-pressed={activeTab === 'risks'} className={activeTab === 'risks' ? 'is-active' : ''} onClick={() => setActiveTab('risks')}>Риски{riskCount ? <span>{riskCount}</span> : null}</button></> : null}
             </nav>
-            <div className="review-content">
-              {editing ? <MetadataEditor fields={draftFields} onChange={setDraftFields} /> : null}
-              {!editing && activeTab === 'fields' ? orderedEntries(fields).map(([key, field]) => <FieldRow key={key} fieldKey={key} field={field} active={selectedSource?.fieldKey === key} reviewed={document.review_status === 'reviewed'} onSelectSource={setSelectedSource} onCopy={copyValue} />) : null}
+            <div ref={reviewContentRef} className="review-content">
+              {activeTab === 'fields' && !editing ? <div className="field-filter" role="group" aria-label="Показать поля"><button type="button" aria-pressed={fieldFilter === 'all'} onClick={() => setFieldFilter('all')}>Все поля</button><button type="button" aria-pressed={fieldFilter === 'attention'} onClick={() => setFieldFilter('attention')}>Проверить{reviewCount ? ` · ${reviewCount}` : ''}</button></div> : null}
+              {editing === 'all' ? <form className="inline-editor" onSubmit={event => { event.preventDefault(); void saveMetadata(); }}><h2>Редактирование реквизитов</h2><MetadataEditor fields={draftFields} onChange={updateDraft} />{editError ? <p className="error" role="alert">{editError}</p> : null}<div className="inline-editor-actions"><button className="primary-button" disabled={saving || !dirty}>Сохранить изменения</button><button className="text-button" type="button" disabled={saving} onClick={cancelEditing}>Отмена</button></div></form> : null}
+              {editing !== 'all' && activeTab === 'fields' ? fieldGroups.map(([label,keys]) => {
+                const entries = keys.filter(key => Object.hasOwn(fields,key) && (fieldFilter !== 'attention' || (!isReviewed && fieldNeedsReview(key,fields[key])) || editing === key));
+                return entries.length ? <div className="field-group" key={label}><h2>{label}</h2>{entries.map(key => editing === key ? <form className="inline-editor" key={key} onSubmit={event => { event.preventDefault(); void saveMetadata(); }}><MetadataEditor fields={draftFields} onlyKey={key} onChange={updateDraft} />{editError ? <p className="error" role="alert">{editError}</p> : null}<div className="inline-editor-actions"><button className="primary-button compact-button" disabled={saving || !dirty}>{saving ? 'Сохраняем…' : 'Сохранить'}</button><button className="text-button" disabled={saving} type="button" onClick={cancelEditing}>Отмена</button></div></form> : <FieldRow showPages={content?.source_format !== 'docx'} key={key} fieldKey={key} field={fields[key]} active={selectedSource?.fieldKey === key} reviewed={isReviewed} onSelectSource={selectSource} onCopy={copyValue} onEdit={startEditing} disabled={isProcessing || Boolean(editing)} />)}</div> : null;
+              }) : null}
+              {activeTab === 'fields' && fieldFilter === 'attention' && !reviewCount && !editing ? <div className="empty-panel"><strong>{isReviewed ? 'Проверка завершена' : 'Сомнительных полей не отмечено'}</strong><span>{isReviewed ? 'Результат сохранён. Можно перейти к следующему договору.' : 'Перед подтверждением просмотрите все поля и оригинал.'}</span><button type="button" className="text-button" onClick={() => setFieldFilter('all')}>Показать все поля</button></div> : null}
               {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
-              {!editing && activeTab === 'risks' ? <RiskReviewPanel key={document.id} fields={fields} review={document.metadata?.risk_review} legacyRisks={document.metadata?.risks} onSelectSource={setSelectedSource} onRun={(profile) => onReviewRisks(document, profile)} /> : null}
+              {!editing && activeTab === 'risks' ? <RiskReviewPanel showPages={content?.source_format !== 'docx'} key={document.id} fields={fields} review={document.metadata?.risk_review} legacyRisks={document.metadata?.risks} onSelectSource={selectSource} onOpenFields={() => setActiveTab('fields')} onRun={profile => onReviewRisks(document,profile)} /> : null}
             </div>
+            <footer className="review-footer">
+              {editing ? <span className="save-status" role="status">{dirty ? 'Есть несохранённые изменения' : 'Измените значение и сохраните'}</span> : isReviewed ? <button className="primary-button" type="button" disabled={nextLoading || isProcessing} onClick={queueEmpty ? onBack : nextDocument}>{nextLoading ? 'Открываем…' : queueEmpty ? 'К списку договоров' : 'Следующий на проверку →'}</button> : activeTab === 'fields' ? <button className="primary-button" type="button" disabled={reviewing || isProcessing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить реквизиты'}</button> : <button className="secondary-button" type="button" onClick={() => setActiveTab('fields')}>Проверить реквизиты <span aria-hidden="true">→</span></button>}
+            </footer>
           </aside>
-          <section className="document-panel" aria-label="Текст договора">
-            <div className="document-panel-heading"><strong>Документ</strong><span>{content?.visual_page_count || content?.page_count ? `${content.visual_page_count || content.page_count} стр.` : ''}</span></div>
+          <section className="document-panel" aria-label="Оригинал договора">
+            <div className="document-panel-heading"><strong>{content?.visual_page_count ? 'Оригинал документа' : 'Текст документа'}</strong><span>{content?.visual_page_count || content?.page_count ? `${content.visual_page_count || content.page_count} стр.` : ''}</span>{content?.visual_page_count ? <div className="document-zoom"><button type="button" aria-label="Уменьшить документ" disabled={zoom <= 0.75} onClick={() => setZoom(value => Math.max(0.75,value-0.25))}>−</button><button type="button" onClick={() => setZoom(1)} aria-label="Сбросить масштаб">{Math.round(zoom*100)}%</button><button type="button" aria-label="Увеличить документ" disabled={zoom >= 2} onClick={() => setZoom(value => Math.min(2,value+0.25))}>+</button></div> : null}</div>
+            {selectedSource ? <div className="selected-source-note">{selectedSource.fieldKey ? fieldLabels[selectedSource.fieldKey] : 'Условие договора'}<span>{sourceLocation ? `Страница ${sourceLocation.page}` : sourceError ? 'Проверьте источник вручную' : content?.visual_page_count ? 'Ищем фрагмент…' : 'Источник выбран'}</span><button type="button" className="text-button" onClick={() => { setSelectedSource(null); setSourceLocation(null); }}>Снять выделение</button></div> : null}
             {sourceError ? <p className="source-location-error" role="status">{sourceError}</p> : null}
             {content?.visual_error ? <p className="source-location-error" role="status">{content.visual_error}. Показан извлечённый текст.</p> : null}
-            <DocumentPages content={content} document={document} loading={contentLoading} selectedSource={selectedSource} location={sourceLocation} token={token} />
+            <div style={{ '--document-scale':zoom }}><DocumentPages content={content} document={document} loading={contentLoading} selectedSource={selectedSource} location={sourceLocation} token={token} onRetry={() => setContentAttempt(value => value+1)} onOpenFile={onOpenFile} /></div>
           </section>
         </div>
-      )}
+      </>}
     </section>
   );
 }

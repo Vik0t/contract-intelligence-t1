@@ -307,6 +307,12 @@ class HFSpaceNuExtractBackend:
         if document_ir is not None:
             parsed = validate_extraction(parsed, document_ir)
         parsed = validate_model_result(parsed, text)
+        parsed['_provenance'] = {'model': None, 'model_runtime': 'huggingface-space',
+                                 'model_revision': None, 'model_revision_source': 'unknown',
+                                 'space_id': self.space_id, 'api_name': self.api_name,
+                                 'instructions': instructions, 'template': template, 'prompts': [prompt_text],
+                                 'parameters': {'temperature': temperature, 'reasoning': reasoning,
+                                                'prompt_mode': prompt_mode, 'context_mode': context_mode, 'context_chars': context_chars}}
 
         usage = HFSpaceUsage(
             elapsed_sec=round(elapsed, 3),

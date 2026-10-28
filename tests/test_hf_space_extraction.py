@@ -28,6 +28,9 @@ def test_hf_space_backend_calls_extraction_endpoint_and_parses_json() -> None:
     assert extracted.usage.input_chars > 0
     assert extracted.usage.output_chars > 0
     assert extracted.usage.status_text == "done"
+    assert extracted.result['_provenance']['space_id'] == backend.space_id
+    assert extracted.result['_provenance']['model'] is None
+    assert extracted.result['_provenance']['model_revision_source'] == 'unknown'
     args, kwargs = client.calls[0]
     assert kwargs["api_name"] == "/on_extract_click"
     assert args[2] == "Договор поставки от 01.01.2026"

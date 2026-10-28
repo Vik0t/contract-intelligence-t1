@@ -18,6 +18,7 @@ from src.extraction.model_loading import (
     record_usage,
     get_extraction_stats,
     _count_tokens_mlx,
+    get_loaded_model_provenance,
 )
 from src.extraction.postprocess import postprocess_extraction, validate_extraction
 from src.extraction.context import document_chunks
@@ -226,7 +227,8 @@ def extract_contract_key_data(
             max_pages=max_pages,
         )
         text, document_ir = extracted_text, extracted_document_ir
-    chunks = document_chunks(text, int(os.getenv("EXTRACTION_CHUNK_CHARS", "12000")))
+    chunk_chars = int(os.getenv('EXTRACTION_CHUNK_CHARS', '12000'))
+    chunks = document_chunks(text, chunk_chars)
     result = merge_extractions([
         extract_fields_from_text(
             chunk,
@@ -236,8 +238,9 @@ def extract_contract_key_data(
             collect_stats=collect_stats,
         ) for chunk in chunks
     ], text, document_ir)
-    result['_provenance'] = {'messages': [build_messages(chunk) for chunk in chunks],
-                             'parameters': {'max_new_tokens': max_new_tokens, 'thinking': thinking}}
+    result['_provenance'] = {**get_loaded_model_provenance(), 'instructions': INSTRUCTIONS,
+                             'template': CONTRACT_TEMPLATE, 'messages': [build_messages(chunk) for chunk in chunks],
+                             'parameters': {'max_new_tokens': max_new_tokens, 'thinking': thinking, 'chunk_chars': chunk_chars}}
 
     if collect_stats:
         return result, {key: value - initial_usage[key] for key, value in get_extraction_stats().items()}

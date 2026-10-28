@@ -52,6 +52,7 @@ backend (FastAPI :8000)
 
 | Режим | Извлечение | Сводка и риски | Где выполняется обработка |
 |---|---|---|---|
+| Правила, `compose.yaml` + `compose.rules.yaml` | Четыре атрибута по контекстным правилам | Не используются | CPU, без весов моделей и внешних API. |
 | Локальный сервер, `compose.yaml` | `numind/NuExtract3` | `Qwen/Qwen3-8B` | В backend на NVIDIA GPU; доступ backend в интернет закрыт. |
 | DeepCode, `compose.yaml` + `compose.api.yaml` | Настраиваемая модель, в примере `qwen3.8-flash-next` | Та же модель через API | Текст отправляется в настроенный внешний API; GPU не требуется. |
 | Локальная разработка на Apple Silicon | `numind/NuExtract3-mlx-8bits` через MLX | Transformers | На компьютере разработчика. |
@@ -126,6 +127,18 @@ ML_ALLOW_EXTERNAL=false
 Если увеличиваете размер загрузки, измените также `client_max_body_size` в `deploy/nginx.conf`. Для фотографий действуют отдельные ограничения: ширина и высота не меньше 320 пикселей, площадь не больше 40 мегапикселей.
 
 ### Запуск
+
+Профиль поставки четырёх атрибутов [pmi-rules-v1](docs/DELIVERY_PROFILE.md): CPU, нативный DOCX, текстовый PDF, PostgreSQL, автоматическое извлечение, OCR и внешние вызовы выключены.
+
+```bash
+cp .env.rules.example .env.rules
+# Задайте сгенерированный POSTGRES_PASSWORD в .env.rules.
+docker compose --env-file .env.rules -f compose.yaml -f compose.rules.yaml build backend frontend
+docker compose --env-file .env.rules -f compose.yaml -f compose.rules.yaml up -d --wait
+curl --fail http://127.0.0.1:8080/api/health/ready
+```
+
+Генератор синтетических договоров, правила подсчёта четырёх приёмочных метрик и команды испытаний приведены в [Проверке по ТЗ и ПМИ](docs/ACCEPTANCE.md).
 
 Локальный сервер с NVIDIA GPU:
 
@@ -263,9 +276,10 @@ uv run python -m scripts.benchmark_models \
 | Метод | Путь | Описание |
 |---|---|---|
 | `POST` | `/documents` | Загрузить `file` через `multipart/form-data`; необязательные `folder_id` и `template_id`. Возвращает `202`, подготовка выполняется в фоне. |
-| `GET` | `/documents` | Список документов с пагинацией, поиском и фильтрацией по папке. |
+| `POST` | `/documents/batch` | Загрузить несколько `files` в одном multipart-запросе; ответ `207` с отдельным результатом для каждого файла. |
+| `GET` | `/documents` | Реестр с полями, поиском и пагинацией; `sort_by=created_at/contract_date/total_amount`, `sort_order=asc/desc`. |
 | `GET` | `/documents/{document_id}` | Статус, ошибки и сохранённые результаты документа. |
-| `POST` | `/documents/{document_id}/analyze` | Поставить извлечение в очередь после подготовки; возвращает текущий документ. |
+| `POST` | `/documents/{document_id}/analyze` | Повторно извлечь поля в ту же запись реестра; возвращает текущий документ. |
 | `POST` | `/documents/{document_id}/metadata` | Совместимый маршрут постановки извлечения в очередь, ответ `202`. |
 | `PATCH` | `/documents/{document_id}/metadata` | Сохранить полный объект редактируемых `fields`. |
 | `PATCH` | `/documents/{document_id}/review` | Подтвердить результат оператором или вернуть на проверку. |
@@ -280,6 +294,8 @@ uv run python -m scripts.benchmark_models \
 | `DELETE` | `/documents/{document_id}` | Удалить документ и связанные данные. |
 
 **Тело запроса `POST /documents/{document_id}/risks`:**
+
+В интерфейсе пользователь выбирает свою компанию из сторон договора. Роль для проверки определяется по реквизитам, тип договора подставляется автоматически; параметры API ниже сохраняют прежний формат.
 
 ```json
 {
@@ -333,6 +349,7 @@ uv run python -m scripts.benchmark_models \
 |---|---|---|
 | `GET` | `/ping` | Проверка доступности HTTP-сервиса. |
 | `GET` | `/health/ready` | Проверка API и соединения с БД; без запуска модели. |
+| `GET` | `/runtime/profile` | Настройки закреплённого профиля и хеши исходников без секретов. |
 | `GET`, `POST` | `/folders` | Список папок и создание папки. |
 | `PATCH`, `DELETE` | `/folders/{folder_id}` | Переименование и удаление папки. |
 | `GET` | `/stats` | Статистика обработки. |
@@ -373,6 +390,8 @@ API на `8000` и PostgreSQL на `5432` не публикуются на хо�
 
 ## Документация по компонентам
 
+- [Контекст проекта](docs/PROJECT_CONTEXT.md) — состояние реализации, результаты и источники решений.
+- [Подготовка к ПМИ](docs/PMI_ACTION_PLAN.md) — оставшиеся работы и критерии завершения.
 - [API](docs/API.md) — маршруты и примеры запросов.
 - [Развёртывание](docs/DEPLOYMENT.md) — Docker, GPU, модели и API-профиль.
 - [Эксплуатация](docs/OPERATIONS.md) — задания, ограничения загрузки и восстановление.

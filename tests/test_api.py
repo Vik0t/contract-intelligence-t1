@@ -24,9 +24,10 @@ TEST_ADMIN_EMAIL = "admin@example.com"
 TEST_ADMIN_PASSWORD = "adminpass123"
 
 @pytest.fixture(autouse=True)
-def setup_database(tmp_path):
+def setup_database(tmp_path, monkeypatch):
     """Use an isolated database and storage directory for every API test."""
     previous_manager = app_module.JOB_MANAGER
+    monkeypatch.setattr(app_module.settings, 'auto_extract_uploads', False)
     previous_manager.shutdown()
 
     engine = database.get_engine(f"sqlite:///{tmp_path / 'test.db'}")
@@ -770,8 +771,13 @@ class TestDocumentEndpoints:
 
     def test_get_document_preview_returns_lightweight_image(self, tmp_path):
         headers = get_auth_header()
-        stored_path = tmp_path / "preview.docx"
-        stored_path.write_bytes(b"preview-placeholder")
+        stored_path = tmp_path / "preview.pdf"
+        with app_module.pymupdf.open() as pdf:
+            page = pdf.new_page(width=600, height=800)
+            page.draw_rect(page.rect, fill=(1, 0, 0), color=(1, 0, 0))
+            page = pdf.new_page(width=800, height=400)
+            page.draw_rect(page.rect, fill=(0, 0, 1), color=(0, 0, 1))
+            pdf.save(stored_path)
         db = database.get_session(app_module.engine)
         try:
             user = database.get_user(db, username=TEST_USERNAME)
@@ -779,10 +785,10 @@ class TestDocumentEndpoints:
                 db,
                 owner=user.id,
                 template_id=None,
-                filename="preview.docx",
+                filename="preview.pdf",
                 stored_path=str(stored_path),
             )
-            database.create_parsed_document(db, document.id, "Договор поставки № 42")
+            database.create_parsed_document(db, document.id, "PAGE 1\nДоговор поставки № 42")
             document_id = document.id
         finally:
             db.close()
@@ -790,8 +796,41 @@ class TestDocumentEndpoints:
         response = client.get(f"/documents/{document_id}/preview", headers=headers)
 
         assert response.status_code == 200
-        assert response.headers["content-type"].startswith("image/svg+xml")
-        assert b"preview.docx" in response.content
+        assert response.headers["content-type"].startswith("image/png")
+        with Image.open(io.BytesIO(response.content)) as image:
+            assert image.size == (960, 1280)
+            assert image.getpixel((480, 640)) == (255, 0, 0)
+
+    def test_docx_preview_uses_fresh_rendered_original_and_ignores_stale_cache(self, tmp_path, monkeypatch):
+        import backend.document_view as document_view
+        monkeypatch.setenv('LIBREOFFICE_BIN', '')
+        monkeypatch.setattr(document_view.shutil, 'which', lambda name: None)
+        headers = get_auth_header()
+        source = tmp_path / 'original.docx'
+        source.write_bytes(b'docx-placeholder')
+        rendered = source.with_name(source.name + '.rendered.pdf')
+        with app_module.pymupdf.open() as pdf:
+            pdf.new_page().insert_text((40, 50), 'Original formatted page')
+            pdf.save(rendered)
+        db = database.get_session(app_module.engine)
+        try:
+            user = database.get_user(db, username=TEST_USERNAME)
+            document = database.create_document(db, owner=user.id, template_id=None, filename=source.name, stored_path=str(source))
+            database.create_parsed_document(db, document.id, 'PAGE 1\nExtracted text')
+            document_id = document.id
+        finally:
+            db.close()
+        response = client.get(f'/documents/{document_id}/preview', headers=headers)
+        assert response.status_code == 200
+        assert response.headers['content-type'].startswith('image/png')
+        with Image.open(io.BytesIO(response.content)) as image:
+            assert image.width == 960
+        changed = rendered.stat().st_mtime_ns + 1_000_000_000
+        os.utime(source, ns=(changed, changed))
+        response = client.get(f'/documents/{document_id}/preview', headers=headers)
+        assert response.status_code == 503
+        assert response.headers['content-type'].startswith('application/json')
+        assert 'превью' in response.json()['detail']
     
     def test_delete_document_success(self):
         """Test deleting a document"""
@@ -1193,5 +1232,177 @@ class TestDataIntegrity:
         })
         assert validate_response.json()["valid"] == False
 
+def test_pmi_batch_preserves_originals_and_isolates_bad_files(monkeypatch):
+    from docx import Document
+    from hashlib import sha256
+    headers = get_auth_header()
+    queued = []
+    monkeypatch.setattr(app_module.JOB_MANAGER, 'enqueue', lambda ident, kind: queued.append((ident, kind)))
+    buffer = io.BytesIO()
+    document = Document()
+    document.add_paragraph('Договор № 42 от 15.09.2026')
+    document.save(buffer)
+    payload = buffer.getvalue()
+    response = client.post('/documents/batch', headers=headers, files=[
+        ('files', ('first.docx', payload, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
+        ('files', ('bad.pdf', b'%PDF-corrupt', 'application/pdf')),
+        ('files', ('second.docx', payload, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
+    ])
+    assert response.status_code == 207
+    result = response.json()
+    assert (result['accepted'], result['rejected']) == (2, 1)
+    assert result['results'][1]['error']
+    assert len(queued) == 2
+    listing = client.get('/documents', headers=headers).json()
+    assert listing['total'] == 2
+    assert len({d['id'] for d in listing['documents']}) == 2
+    for item in listing['documents']:
+        original = client.get(f"/documents/{item['id']}/file", headers=headers)
+        assert sha256(original.content).digest() == sha256(payload).digest()
+
+
+def test_pmi_registry_sorts_numerically_before_pagination_and_searches_cyrillic():
+    import time
+    headers = get_auth_header()
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        for index in range(100):
+            doc = database.create_document(db, owner=user.id, template_id=None, filename=f'file-{index}.pdf')
+            database.create_metadata(db, doc.id, {'contract_number': {'value': f'Д-{index}'},
+                'contract_date': {'value': '2026-01-01' if index % 2 else '2026-02-01'},
+                'total_amount': {'value': index + 1}, 'parties': [{'name': 'ООО АЛЬФА', 'role': 'Заказчик'}]})
+        database.update_document(db, doc.id, processing_status='failed', processing_error='Тестовая ошибка')
+        failed_document_id = doc.id
+    started = time.perf_counter()
+    listed = client.get('/documents?sort_by=total_amount&sort_order=asc&limit=2&page=2', headers=headers)
+    assert time.perf_counter() - started < 3
+    assert listed.status_code == 200
+    assert listed.json()['total'] == 100
+    assert [d['fields']['total_amount']['value'] for d in listed.json()['documents']] == [3, 4]
+    found = client.get('/documents?search=альфа&sort_by=contract_date&sort_order=desc&limit=100', headers=headers).json()
+    assert found['total'] == 100
+    assert found['documents'][0]['fields']['contract_date']['value'] == '2026-02-01'
+    assert next(d for d in found['documents'] if d['id'] == failed_document_id)['status'] == 'failed'
+    assert client.get('/documents?sort_by=unknown', headers=headers).status_code == 422
+    assert client.get('/documents?page=0', headers=headers).status_code == 422
+    assert client.get('/documents?limit=10000', headers=headers).status_code == 422
+    assert client.get('/documents?search=%25', headers=headers).json()['total'] == 0
+
+
+def test_pmi_unavailable_database_returns_clear_503(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    def unavailable(*args, **kwargs):
+        raise OperationalError('SELECT 1', {}, Exception('unavailable'))
+    monkeypatch.setattr(app_module, 'get_user_from_token', unavailable)
+    response = client.get('/documents', headers={'Authorization': 'Bearer unavailable'})
+    assert response.status_code == 503
+    assert 'База данных' in response.json()['detail']
+
+
+def test_pmi_reanalysis_updates_same_metadata_and_records_rules(monkeypatch):
+    from src.extraction.rules import extract_with_rules
+    headers = get_auth_header()
+    text = 'PAGE 1\nДоговор № 42\n15.09.2026\nЗаказчик: ООО "Альфа"\nИсполнитель: ООО "Бета"\nСумма договора 100 рублей.'
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        doc = database.create_document(db, owner=user.id, template_id=None, filename='repeat.pdf')
+        database.create_parsed_document(db, doc.id, text)
+        metadata = database.create_metadata(db, doc.id, {'contract_number': {'value': 'old'}})
+        database.update_document(db, doc.id, processing_status='extracted')
+        ident, metadata_id = doc.id, metadata.id
+    monkeypatch.setattr(app_module.settings, 'extraction_backend', 'rules')
+    monkeypatch.setattr(app_module.EXTRACTION_SERVICE, 'extract', lambda **kwargs: extract_with_rules(kwargs['text']))
+    monkeypatch.setattr(app_module.JOB_MANAGER, 'enqueue', lambda document_id, kind: app_module.run_processing_job(kind, document_id))
+    assert client.post(f'/documents/{ident}/analyze', headers=headers).status_code == 200
+    result = client.get(f'/documents/{ident}', headers=headers).json()
+    assert result['metadata']['id'] == metadata_id
+    assert result['metadata']['fields']['contract_number']['value'] == '42'
+    assert result['metadata']['field_statuses']['contract_number']['method'] == 'rule'
+    assert result['metadata']['processing']['rules_version']
+    assert result['metadata']['processing']['processed_at']
+    assert client.get('/documents', headers=headers).json()['total'] == 1
+    with database.get_session(app_module.engine) as db:
+        assert db.query(database.DocumentMetadata).count() == 1
+
+
+def test_api_model_identity_is_saved_without_local_revision(monkeypatch):
+    from src.extraction.provenance import model_identity
+    from src.extraction.validation import validate_model_result
+    headers = get_auth_header()
+    text = 'PAGE 1\nДоговор № 42'
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        doc = database.create_document(db, owner=user.id, template_id=None, filename='identity.pdf')
+        database.create_parsed_document(db, doc.id, text)
+        ident = doc.id
+    fields = validate_model_result({'contract_number': {'value': '42', 'evidence': 'Договор № 42'}}, text)
+    fields['_provenance'] = {**model_identity('provider/actual-model', 'api'), 'prompts': ['synthetic test prompt']}
+    monkeypatch.setenv('CONTRACT_MODEL_REVISION', 'unrelated-local-revision')
+    monkeypatch.setattr(app_module.settings, 'extraction_backend', 'api')
+    monkeypatch.setattr(app_module.EXTRACTION_SERVICE, 'extract', lambda **kw: (fields, {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}))
+    monkeypatch.setattr(app_module, 'summarize_document', lambda *args: 'Проверочная сводка')
+    app_module.process_metadata_extraction(ident)
+    saved = client.get(f'/documents/{ident}', headers=headers).json()
+    assert saved['status'] == 'extracted'
+    processing = saved['metadata']['processing']
+    assert processing['backend'] == 'api'
+    assert processing['model'] == 'provider/actual-model'
+    assert processing['model_revision'] is None
+    assert processing['model_revision_source'] == 'unknown'
+    assert processing['prompts'] == ['synthetic test prompt']
+    with database.get_session(app_module.engine) as db:
+        assert database.get_metadata(db, ident).fields['_provenance']['model'] == 'provider/actual-model'
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+def test_registry_status_filter_applies_before_pagination_and_respects_owner():
+    headers = get_auth_header()
+    other_headers = get_auth_header('registryother', 'registry_other@example.com', 'anotherpass123')
+    with database.get_session(app_module.engine) as db:
+        owner = database.get_user(db, username=TEST_USERNAME)
+        other = database.get_user(db, username='registryother')
+        ids = {}
+        for key, status, reviewed, has_metadata, user_id in [
+            ('pending_a', 'extracted', False, True, owner.id),
+            ('pending_b', 'extracted', False, True, owner.id),
+            ('reviewed', 'extracted', True, True, owner.id),
+            ('processing', 'processing', False, False, owner.id),
+            ('reanalyzing', 'processing', True, True, owner.id),
+            ('failed', 'failed', True, True, owner.id),
+            ('uploaded', 'uploaded', False, False, owner.id),
+            ('foreign', 'extracted', False, True, other.id),
+        ]:
+            doc = database.create_document(db, owner=user_id, template_id=None, filename=f'{key}.pdf')
+            database.update_document(db, doc.id, processing_status=status, review_status='reviewed' if reviewed else 'pending')
+            if has_metadata:
+                database.create_metadata(db, doc.id, {'contract_number': {'value': key}})
+            ids[key] = doc.id
+    pending = client.get('/documents?view_status=pending&limit=1&page=2', headers=headers).json()
+    assert pending['total'] == 2
+    assert [doc['id'] for doc in pending['documents']] == [ids['pending_a']]
+    assert {doc['id'] for doc in client.get('/documents?view_status=reviewed', headers=headers).json()['documents']} == {ids['reviewed']}
+    assert {doc['id'] for doc in client.get('/documents?view_status=processing', headers=headers).json()['documents']} == {ids['processing'], ids['reanalyzing'], ids['uploaded']}
+    assert {doc['id'] for doc in client.get('/documents?view_status=failed', headers=headers).json()['documents']} == {ids['failed']}
+    assert client.get('/documents?view_status=pending&search=pending_b', headers=headers).json()['total'] == 1
+    assert client.get('/documents?view_status=pending', headers=other_headers).json()['total'] == 1
+    assert client.get('/documents?view_status=unknown', headers=headers).status_code == 422
+
+
+def test_operator_amount_edit_retains_currency_without_claiming_old_source():
+    headers = get_auth_header()
+    with database.get_session(app_module.engine) as db:
+        owner = database.get_user(db, username=TEST_USERNAME)
+        document = database.create_document(db, owner=owner.id, template_id=None, filename='manual-amount.pdf')
+        database.create_metadata(db, document.id, {'total_amount': {'value': 1000, 'currency': 'RUB', 'evidence': 'Сумма 1000 рублей'}})
+        document_id = document.id
+    response = client.patch(f'/documents/{document_id}/metadata', headers=headers,
+                            json={'fields': {'total_amount': {'value': 1250.5, 'currency': 'USD'}}})
+    assert response.status_code == 200
+    amount = response.json()['metadata']['fields']['total_amount']
+    assert amount['value'] == 1250.5 and amount['currency'] == 'USD'
+    assert amount['method'] == 'manual' and amount['status'] == 'needs_review'
+    assert not amount.get('evidence')
+    assert client.get(f'/documents/{document_id}', headers=headers).json()['metadata']['fields']['total_amount']['currency'] == 'USD'

@@ -15,12 +15,16 @@ from src.extraction.summary import generate_chat
 from src.extraction.validation import ContractResult, validate_model_result, merge_extractions
 from src.extraction.recovery import recover_missing
 from src.extraction.api_models import safe_error_details
+from src.extraction.provenance import model_identity
 
 
 def extract_fields_with_api(text: str, document_ir: DocumentIR | None = None) -> tuple[dict[str, Any], dict[str, int]]:
     model = os.getenv("EXTRACTION_API_MODEL", "").strip()
     if not model:
         raise ValueError("Укажите EXTRACTION_API_MODEL из списка моделей вашего API")
+    provider = os.getenv('EXTRACTION_API_PROVIDER', 'deepcode')
+    max_new_tokens = int(os.getenv('EXTRACTION_API_MAX_NEW_TOKENS', '4096'))
+    chunk_chars = int(os.getenv('EXTRACTION_CHUNK_CHARS', '12000'))
     results = []
     prompts = []
     prompt_tokens = completion_tokens = 0
@@ -36,15 +40,15 @@ def extract_fields_with_api(text: str, document_ir: DocumentIR | None = None) ->
         nonlocal prompt_tokens, completion_tokens
         prompts.append(prompt)
         raw = generate_chat(
-            prompt, model=model, provider=os.getenv("EXTRACTION_API_PROVIDER", "deepcode"),
-            max_tokens=int(os.getenv("EXTRACTION_API_MAX_NEW_TOKENS", "4096")), temperature=0.0,
+            prompt, model=model, provider=provider,
+            max_tokens=max_new_tokens, temperature=0.0,
         )
         prompt_tokens += len(prompt.split())
         completion_tokens += len(raw.split())
         return raw
 
     validation_trace = []
-    for chunk in document_chunks(text, int(os.getenv("EXTRACTION_CHUNK_CHARS", "12000"))):
+    for chunk in document_chunks(text, chunk_chars):
         prompt = (
             f"{INSTRUCTIONS}\nВерни только JSON-объект, соответствующий JSON Schema ниже. "
             "Не возвращай саму схему. enum означает одно выбранное значение, а не массив вариантов. "
@@ -75,7 +79,8 @@ def extract_fields_with_api(text: str, document_ir: DocumentIR | None = None) ->
         except Exception as exc:
             repair = {'calls': 1, 'status': 'error', **safe_error_details(exc)}
     result['_repair'] = repair
-    result['_provenance'] = {'model': model, 'prompts': prompts, 'provider': os.getenv('EXTRACTION_API_PROVIDER', 'deepcode'),
-                             'parameters': {'max_new_tokens': int(os.getenv('EXTRACTION_API_MAX_NEW_TOKENS', '4096')), 'temperature': 0.0},
+    result['_provenance'] = {**model_identity(model, 'api'), 'prompts': prompts, 'provider': provider,
+                             'instructions': INSTRUCTIONS, 'schema': schema,
+                             'parameters': {'max_new_tokens': max_new_tokens, 'temperature': 0.0, 'chunk_chars': chunk_chars},
                              'validation': validation_trace, 'repair': repair}
     return result, {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}

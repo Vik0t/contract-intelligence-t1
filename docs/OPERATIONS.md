@@ -2,9 +2,11 @@
 
 ## Processing lifecycle
 
-Document processing is durable at the database level and executed by a single local GPU worker:
+Document processing is durable at the database level and executed by the configured worker:
 
-`uploaded` → `processing` → `ready` → `extracting` → `extracted`
+`uploaded` → `processing` (parse, then extract) → `extracted`
+
+`AUTO_EXTRACT_UPLOADS=true` starts extraction on the server after parsing, including API and batch uploads. With `false`, parsing ends at `ready` and `/documents/{id}/analyze` starts extraction. Calling this endpoint again replaces the result in the same metadata row and clears earlier summaries and risk reviews. A concurrent operator edit takes precedence over a running extraction.
 
 Failures use `failed` and can be retried. Queued and interrupted jobs are recovered on application startup. For a multi-process production deployment, replace the local worker with Redis/RQ, Celery, or another external queue and run one GPU worker per device.
 
@@ -14,6 +16,8 @@ The defaults are configured through `.env`:
 
 - `MAX_UPLOAD_SIZE_MB=50`
 - `MAX_PDF_PAGES=200`
+- `ALLOW_OCR_UPLOADS=false` (PDF without extractable text is rejected; enable explicitly for the optional OCR path)
+- `AUTO_EXTRACT_UPLOADS=true`
 - `MAX_JOB_ATTEMPTS=3`
 - `JOB_WORKER_COUNT=1`
 - `JOB_STALE_AFTER_MINUTES=30`
@@ -22,6 +26,14 @@ The defaults are configured through `.env`:
 - `HF_SPACE_PROMPT_MODE=compact`, `HF_SPACE_CONTEXT_MODE=retrieved`, `HF_SPACE_CONTEXT_CHARS=3000` (recommended Space settings)
 
 Uploads are streamed to a temporary file, checked by file signature, and validated before being copied to permanent storage.
+
+Password-protected PDF, empty PDF/DOCX and corrupt DOCX are rejected before persistence. `/documents/batch` accepts 1–100 files and reports individual failures without discarding valid files. Field statuses, reasons, sources and processing provenance are stored with metadata. Login, uploads, parsing, extraction, errors and deletion are written to the application log (`docker compose logs backend`).
+
+For CPU extraction without model weights, use `EXTRACTION_BACKEND=rules` or the `compose.rules.yaml` override. See [acceptance checks](ACCEPTANCE.md) for the frozen synthetic dataset and measured scope.
+
+The pinned PMI delivery is [pmi-rules-v1](DELIVERY_PROFILE.md), selected by `.env.rules.example` and `compose.rules.yaml`. Its settings are validated before server startup: rules/CPU, native DOCX, digital PDF, no OCR or external calls, automatic extraction, PostgreSQL. `GET /runtime/profile` exposes effective settings and source hashes; each saved extraction retains the same identity. The evaluator supports `--transport http --base-url http://127.0.0.1:8080/api` and reads its session token from `PMI_SESSION_TOKEN`. It verifies upload → queue → parsing → extraction → persistence → API reread and the original-file hash. Use a fresh output path for each run.
+
+Local model identity is retained from the actual load. Transformers uses `CONTRACT_MODEL_ID` and `CONTRACT_MODEL_REVISION`; MLX uses its separate `CONTRACT_MLX_MODEL_ID` (default `numind/NuExtract3-mlx-8bits`) and optional `CONTRACT_MLX_MODEL_REVISION`. MLX resolves the configured ref to a snapshot directory before loading. Saved metadata keeps the loaded identity even when weights are subsequently unloaded. API model identity comes from the ID sent to the service; unavailable provider revision information remains explicitly unknown.
 
 ## Tests and checks
 

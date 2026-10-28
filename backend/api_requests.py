@@ -1,7 +1,7 @@
 from re import fullmatch, match
 from fastapi import HTTPException
 from pydantic import AfterValidator, BaseModel, EmailStr, Field, field_validator, model_validator
-from typing import Annotated, Optional, Dict, Any, List
+from typing import Annotated, Optional, Dict, Any, List, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -369,6 +369,7 @@ class DocumentResponse(BaseModel):
         ...,
         description="Document creation timestamp"
     )
+    fields: Dict[str, Any] = Field(default_factory=dict, description="Registry attributes with field statuses and sources")
     
 class DocumentMetadataResponse(DocumentResponse):
     """
@@ -420,6 +421,21 @@ class DocumentListResponse(BaseModel):
         description="List of documents"
     )
 
+
+class BatchUploadItem(BaseModel):
+    filename: str
+    success: bool
+    document_id: Optional[int] = None
+    document: Optional[DocumentResponse] = None
+    error: Optional[str] = None
+    status_code: int
+
+
+class BatchUploadResponse(BaseModel):
+    results: List[BatchUploadItem]
+    accepted: int
+    rejected: int
+
 class DocumentDeleteResponse(BaseModel):
     """
     Response model for document deletion
@@ -456,6 +472,16 @@ class MetadataExtractResponse(BaseModel):
         description="Extracted metadata information"
     )
 
+class FieldAssessment(BaseModel):
+    status: Literal['found', 'not_found', 'needs_review']
+    reason: Optional[str] = None
+    method: str
+    evidence: Optional[str] = None
+    page_number: Optional[int] = None
+    paragraph_number: Optional[int] = None
+    candidates: Optional[List[Dict[str, Any]]] = None
+
+
 class MetadataResponse(BaseModel):
     """
     Metadata information response
@@ -478,6 +504,8 @@ class MetadataResponse(BaseModel):
     )
     risks: Optional[List[Dict[str, Any]]] = None
     risk_review: Optional[Dict[str, Any]] = None
+    field_statuses: Dict[str, FieldAssessment] = Field(default_factory=dict)
+    processing: Dict[str, Any] = Field(default_factory=dict, description="Processing time, rules, model, parameters and prompts")
     created_at: ResponseDateTime = Field(
         ...,
         description="Metadata creation timestamp"

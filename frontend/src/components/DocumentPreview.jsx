@@ -8,17 +8,21 @@ export default function DocumentPreview({ document, token }) {
 
   useEffect(() => {
     const host = hostRef.current;
+    setPreviewUrl('');
+    setFailed(false);
     if (!host || !document.has_file) return undefined;
     const controller = new AbortController();
     let objectUrl = '';
 
     const loadPreview = async () => {
       try {
-        const blob = await requestBlob(`/documents/${document.id}/preview`, token, controller.signal);
+        const blob = await requestBlob(`/documents/${document.id}/preview`, token, controller.signal, 'no-cache');
+        if (!blob.type.startsWith('image/png')) throw new Error('Original preview unavailable');
+        if (controller.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
         setPreviewUrl(objectUrl);
       } catch (error) {
-        if (error.name !== 'AbortError') setFailed(true);
+        if (!controller.signal.aborted && error.name !== 'AbortError') setFailed(true);
       }
     };
 
@@ -35,17 +39,13 @@ export default function DocumentPreview({ document, token }) {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [document.has_file, document.id, token]);
+  }, [document.has_file, document.id, document.filename, token]);
 
   return (
     <div className="document-preview" ref={hostRef} aria-hidden="true">
-      {previewUrl ? <img src={previewUrl} alt="" /> : (
-        <div className={`preview-placeholder${failed ? ' is-failed' : ''}`}>
-          <span>{document.filename?.split('.').pop()?.toUpperCase() || 'DOC'}</span>
-          <i /><i /><i /><i /><i />
-        </div>
+      {previewUrl ? <img src={previewUrl} alt="" onError={() => { setPreviewUrl(''); setFailed(true); }} /> : (
+        <div className="preview-placeholder"><span>{!document.has_file ? 'Файл недоступен' : failed ? 'Превью недоступно' : 'Готовим превью…'}</span></div>
       )}
-      <div className="preview-shade" />
     </div>
   );
 }

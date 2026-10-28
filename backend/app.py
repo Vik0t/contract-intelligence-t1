@@ -1,7 +1,5 @@
 import logging
 import traceback
-import html
-import io
 from copy import deepcopy
 from datetime import datetime, timedelta
 import mimetypes
@@ -12,13 +10,13 @@ import threading
 import bcrypt
 import httpx
 import pymupdf
-from PIL import Image, ImageOps
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
-from fastapi import FastAPI, File, Form, HTTPException, Header, Request, UploadFile
+from typing import Optional, Literal
+from fastapi import FastAPI, File, Form, HTTPException, Header, Request, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
+from sqlalchemy.exc import OperationalError, InterfaceError
 from starlette.concurrency import run_in_threadpool
 
 import backend.database as database
@@ -27,14 +25,19 @@ from backend.config import get_settings
 from backend.file_validation import UploadValidationError, validate_document_file
 from backend.extraction import ExtractionService
 from backend.jobs import JobManager
-from backend.document_view import ViewUnavailable, locate_evidence, page_count as visual_page_count, render_page, view_pdf_path
+from backend.document_view import ViewUnavailable, locate_evidence, page_count as visual_page_count, render_page, render_preview, view_pdf_path
+from backend.delivery_profile import validate_delivery_profile, runtime_source_sha256
+from backend.document_processing import parse_for_extraction
 
-from src.local_extraction import extract_text_from_document
 from src.extraction.summary import summarize_document
 from src.extraction.risk_review import RiskProfile, ReviewIncomplete, ScopeNotSupported, review_contract_risks
+from src.extraction.reliability import assess_fields, RULES_VERSION
+from src.extraction.provenance import processing_provenance
 from uuid import uuid4
 
 settings = get_settings()
+DELIVERY_PROFILE = validate_delivery_profile(settings)
+RUNTIME_SOURCE_SHA256 = runtime_source_sha256()
 EXTRACTION_SERVICE = ExtractionService(settings)
 
 
@@ -68,6 +71,13 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+
+@app.exception_handler(OperationalError)
+@app.exception_handler(InterfaceError)
+async def database_unavailable(_request: Request, exc):
+    logger.error("database_unavailable error_type=%s", type(exc).__name__)
+    return JSONResponse(status_code=503, content={"detail": "База данных временно недоступна. Повторите запрос позже."})
+
 engine = database.get_engine(settings.database_url)
 database.create_tables(engine)
 
@@ -90,6 +100,12 @@ async def readiness():
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
     # Weight and GPU checks run once in scripts.serve before this process starts.
     return {"status": "ready", "database": "ok", "extraction": settings.extraction_backend}
+
+
+@app.get('/runtime/profile', summary='Read effective delivery profile and source hashes')
+async def delivery_profile():
+    from src.extraction.provenance import runtime_versions
+    return {**DELIVERY_PROFILE, **runtime_versions(), 'runtime_source_sha256': RUNTIME_SOURCE_SHA256}
 
 
 @app.get("/", include_in_schema=False)
@@ -161,7 +177,9 @@ def create_document_response(document):
     """Create a DocumentResponse from a document object."""
     has_metadata = document.document_metadata is not None
     has_parsed_document = document.parsed_text is not None
-    if has_metadata:
+    if getattr(document, 'processing_status', None) in {'processing', 'failed'}:
+        status = document.processing_status
+    elif has_metadata:
         status = 'extracted'
     elif has_parsed_document and getattr(document, 'processing_status', None) in (None, 'uploaded'):
         status = 'ready'
@@ -181,7 +199,8 @@ def create_document_response(document):
         has_file=bool(document.stored_path and Path(document.stored_path).exists()),
         review_status=getattr(document, 'review_status', None) or 'pending',
         reviewed_at=getattr(document, 'reviewed_at', None),
-        created_at=document.created_at
+        created_at=document.created_at,
+        fields={key: value for key, value in (document.document_metadata.fields or {}).items() if key != '_provenance'} if has_metadata else {},
     )
 
 def create_folder_response(folder, session):
@@ -223,6 +242,8 @@ def create_metadata_response(metadata):
         summary=getattr(metadata, 'summary', None),
         risks=getattr(metadata, 'risks', None),
         risk_review=getattr(metadata, 'risk_review', None),
+        field_statuses=(metadata.fields or {}).get('_quality', {}),
+        processing=(metadata.fields or {}).get('_provenance', {}),
         created_at=metadata.created_at
     )
 
@@ -280,28 +301,6 @@ def readable_document_pages(parsed_document):
     return pages, document_ir.get('source_format')
 
 
-def create_text_preview_svg(filename: str, text: str) -> bytes:
-    """Create a lightweight first-page preview when a native render is unavailable."""
-    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
-    lines = [filename[:48], *raw_lines[:11]]
-    text_nodes = []
-    for index, line in enumerate(lines):
-        safe_line = html.escape(line[:64])
-        weight = '700' if index == 0 else '400'
-        size = '18' if index == 0 else '12'
-        text_nodes.append(
-            f'<text x="30" y="{48 + index * 25}" font-family="Arial, sans-serif" '
-            f'font-size="{size}" font-weight="{weight}" fill="#25282c">{safe_line}</text>'
-        )
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="360" height="480" viewBox="0 0 360 480">'
-        '<rect width="360" height="480" fill="#ffffff"/>'
-        '<rect x="0" y="0" width="8" height="480" fill="#18aef0"/>'
-        f'{"".join(text_nodes)}'
-        '</svg>'
-    )
-    return svg.encode('utf-8')
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -323,16 +322,9 @@ def process_document_parsing(document_id: int):
             with PROCESSING_LOCK:
                 started_at = datetime.now()
                 logger.info(f"Calling extract_text_from_document for {document_id}")
-                parse_path = stored_path
-                if Path(stored_path).suffix.lower() == '.docx' and os.getenv('DOCX_USE_RENDERED_PAGES', 'false').lower() == 'true':
-                    parse_path = view_pdf_path(stored_path)
-                parsed_text, document_ir = extract_text_from_document(parse_path)
-                if str(parse_path) != str(stored_path):
-                    from src.document_ir import SourceFormat
-                    document_ir.source_format = SourceFormat.DOCX
-                    document_ir.source_path = str(stored_path)
+                parsed_text, document_ir = parse_for_extraction(stored_path, settings)
                 parsing_time = (datetime.now() - started_at).total_seconds()
-                logger.info(f"Document {document_id} parsed successfully in {parsing_time:.2f}s. Text length: {len(parsed_text)}")
+                logger.info("text_extracted document_id=%s seconds=%.3f length=%s pages=%s", document_id, parsing_time, len(parsed_text), len(document_ir.pages))
 
             if database.get_document(db, document_id) is None:
                 logger.warning(f"Document {document_id} was deleted during parsing")
@@ -405,6 +397,8 @@ def process_metadata_extraction(document_id: int):
             logger.error(f"Document {document_id} or parsed document not found")
             return
         logger.info(f"Starting metadata extraction for document {document_id}")
+        previous_metadata = database.get_metadata(db, document_id)
+        previous_fields = deepcopy(previous_metadata.fields) if previous_metadata else None
 
         try:
             document_ir = None
@@ -426,8 +420,25 @@ def process_metadata_extraction(document_id: int):
                 extraction_time = (datetime.now() - started_at).total_seconds()
                 logger.info(f"Extraction completed in {extraction_time:.2f}s. Tokens: {token_usage}")
 
+            extracted_data = assess_fields(extracted_data, parsed_doc.text, document=document_ir, reference_date=document.created_at)
+            extracted_data['_provenance'] = processing_provenance(settings.extraction_backend, extracted_data.get('_provenance'), extraction_time)
+            extracted_data['_provenance'].update(
+                delivery_profile=DELIVERY_PROFILE['profile']['id'],
+                profile_sha256=DELIVERY_PROFILE['profile_sha256'],
+                docx_parser=DELIVERY_PROFILE['profile']['docx_parser'],
+                runtime_source_sha256=RUNTIME_SOURCE_SHA256)
+            logger.info("attributes_extracted document_id=%s rules=%s seconds=%.3f fields=%s", document_id, RULES_VERSION, extraction_time,
+                        {key: value['status'] for key, value in extracted_data['_quality'].items()})
+
             if database.get_document(db, document_id) is None:
                 logger.warning(f"Document {document_id} was deleted during extraction")
+                return
+
+            db.expire_all()
+            current_metadata = database.get_metadata(db, document_id)
+            if (current_metadata.fields if current_metadata else None) != previous_fields:
+                logger.info("extraction_discarded document_id=%s reason=operator_edit", document_id)
+                database.update_document(db, document_id, processing_status='extracted', processing_error=None)
                 return
 
             metadata = database.update_metadata(
@@ -435,6 +446,10 @@ def process_metadata_extraction(document_id: int):
                 document_id=document_id,
                 fields=extracted_data
             )
+            metadata.summary = None
+            metadata.risks = None
+            metadata.risk_review = None
+            db.commit()
             logger.info(f"Metadata saved for document {document_id}")
 
             database.update_document(
@@ -451,6 +466,8 @@ def process_metadata_extraction(document_id: int):
             # Если HF API недоступен/лимитирован, документ всё равно должен
             # остаться в статусе 'extracted' с полями, просто без summary.
             try:
+                if settings.extraction_backend == 'rules':
+                    raise RuntimeError('Режим rules: автоматическая LLM-сводка отключена')
                 summary_text = summarize_document(parsed_doc.text, extracted_data)
                 database.save_insights(
                     db,
@@ -507,6 +524,12 @@ def process_metadata_extraction(document_id: int):
 def run_processing_job(kind: str, document_id: int) -> None:
     if kind == 'parse':
         process_document_parsing(document_id)
+        if settings.auto_extract_uploads:
+            with database.get_session(engine) as db:
+                document = database.get_document(db, document_id)
+                if document and document.processing_status == 'ready':
+                    database.update_document(db, document_id, processing_status='processing')
+                    JOB_MANAGER.enqueue(document_id, 'extract')
     elif kind == 'extract':
         process_metadata_extraction(document_id)
     else:
@@ -580,6 +603,7 @@ async def login(login_data: api_requests.UserLoginRequest):
             raise HTTPException(status_code=401, detail="Invalid username or password")
         
         session = database.create_session(db, user.id)
+        logger.info("user_login user_id=%s", user.id)
         
         return api_requests.UserLoginResponse(
             user=create_user_response(user),
@@ -824,7 +848,10 @@ async def upload_document(
     
     filename = file.filename or ""
     file_extension = os.path.splitext(filename)[1].lower()
+    if settings.delivery_profile == 'pmi-rules-v1' and file_extension.removeprefix('.') not in DELIVERY_PROFILE['profile']['accepted_formats']:
+        raise HTTPException(status_code=400, detail='Профиль поставки принимает PDF и DOCX с текстовым слоем')
     if file_extension not in {'.pdf', '.docx', '.jpg', '.jpeg', '.png'}:
+        logger.warning("upload_rejected user_id=%s filename=%r reason=unsupported_format", user.id, filename)
         raise HTTPException(
             status_code=400,
             detail="Поддерживаются PDF, DOCX, JPG и PNG"
@@ -841,6 +868,7 @@ async def upload_document(
                     break
                 total_size += len(chunk)
                 if total_size > settings.upload_limit_bytes:
+                    logger.warning("upload_rejected user_id=%s filename=%r reason=size", user.id, filename)
                     raise HTTPException(
                         status_code=413,
                         detail=f"Файл слишком большой. Максимальный размер: {settings.max_upload_size_mb} МБ",
@@ -852,8 +880,10 @@ async def upload_document(
                 temp_path,
                 file_extension,
                 max_pdf_pages=settings.max_pdf_pages,
+                allow_ocr=settings.allow_ocr_uploads,
             )
         except UploadValidationError as exc:
+            logger.warning("upload_rejected user_id=%s filename=%r reason=%s", user.id, filename, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         
         db = database.get_session(engine)
@@ -886,6 +916,7 @@ async def upload_document(
                 processing_error=None
             )
             JOB_MANAGER.enqueue(document.id, 'parse')
+            logger.info("file_uploaded user_id=%s document_id=%s filename=%r bytes=%s format=%s", user.id, document.id, filename, total_size, file_extension)
             
             return api_requests.DocumentUploadResponse(
                 success=True,
@@ -909,6 +940,33 @@ async def upload_document(
                 pass
             
 
+@app.post('/documents/batch', response_model=api_requests.BatchUploadResponse, status_code=207,
+          summary='Upload multiple documents, isolating individual failures')
+async def upload_documents(files: list[UploadFile] = File(...), template_id: Optional[int] = Form(None),
+                           folder_id: Optional[int] = Form(None), authorization: str = Header(...)):
+    user, db = get_user_from_token(authorization.removeprefix('Bearer '))
+    db.close()
+    if not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Invalid authentication scheme')
+    if not 1 <= len(files) <= 100:
+        raise HTTPException(status_code=422, detail='В пакете должно быть от 1 до 100 файлов')
+    results = []
+    for file in files:
+        try:
+            uploaded = await upload_document(file, template_id, folder_id, authorization)
+            results.append(api_requests.BatchUploadItem(filename=file.filename or '', success=True,
+                document_id=uploaded.document_id, document=uploaded.document, status_code=202))
+        except HTTPException as exc:
+            if exc.status_code in {401, 403, 503}:
+                raise
+            results.append(api_requests.BatchUploadItem(filename=file.filename or '', success=False,
+                error=str(exc.detail), status_code=exc.status_code))
+        finally:
+            await file.close()
+    accepted = sum(item.success for item in results)
+    return api_requests.BatchUploadResponse(results=results, accepted=accepted, rejected=len(results) - accepted)
+
+
 @app.get(
     "/documents",
     response_model=api_requests.DocumentListResponse,
@@ -916,10 +974,13 @@ async def upload_document(
     description="Get all documents for current user"
 )
 async def list_documents(
-    page: Optional[int] = 1,
-    limit: Optional[int] = 50,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
     folder_id: Optional[int] = None,
     search: Optional[str] = None,
+    sort_by: Literal['created_at', 'contract_date', 'total_amount'] = 'created_at',
+    sort_order: Literal['asc', 'desc'] = 'desc',
+    view_status: Literal['all', 'pending', 'reviewed', 'processing', 'failed'] = 'all',
     authorization: str = Header(...)
 ):
     """
@@ -942,7 +1003,10 @@ async def list_documents(
             page=page,
             limit=limit,
             folder_id=folder_id,
-            search=search
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            view_status=view_status,
         )
         
         return api_requests.DocumentListResponse(
@@ -1035,6 +1099,7 @@ async def delete_document(
         try_remove_file(stored_path)
         if stored_path and Path(stored_path).suffix.lower() == '.docx':
             try_remove_file(str(Path(stored_path).with_name(Path(stored_path).name + '.rendered.pdf')))
+        logger.info("document_deleted user_id=%s document_id=%s", user.id, document_id)
         
         return api_requests.DocumentDeleteResponse(
             success=True,
@@ -1066,8 +1131,6 @@ async def analyze_document(
             raise HTTPException(status_code=404, detail="Document not found")
         verify_document_ownership(user, document)
 
-        if document.document_metadata is not None:
-            return create_document_response(document)
         if database.get_parsed_document(db, document_id) is None:
             if document.processing_status == 'processing':
                 raise HTTPException(status_code=409, detail="Document is still being prepared")
@@ -1108,10 +1171,32 @@ async def update_document_metadata(
             raise HTTPException(status_code=404, detail="Document not found")
         verify_document_ownership(user, document)
 
+        existing_metadata = database.get_metadata(db, document.id)
+        edited_fields = deepcopy(metadata_data.fields)
+        previous_fields = existing_metadata.fields if existing_metadata else {}
+        for key in list(edited_fields):
+            if key.startswith('_'):
+                edited_fields.pop(key)
+        for key, field in edited_fields.items():
+            if field == previous_fields.get(key):
+                continue
+            entries = field if isinstance(field, list) else [field]
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                for source_key in ('evidence', 'page_number', 'paragraph_number', 'name_evidence', 'name_page_number', 'inn_evidence', 'inn_page_number'):
+                    if source_key in item:
+                        item[source_key] = None
+                item.pop('candidates', None)
+                item.pop('grounding_reason', None)
+                item.update(status='needs_review', reason='Значение изменено вручную', method='manual')
+        edited_fields = assess_fields(edited_fields, reference_date=document.created_at)
+        edited_fields['_provenance'] = {**previous_fields.get('_provenance', {}),
+                                       'edited_at': datetime.now().astimezone().isoformat(), 'edited_by': user.id}
         metadata = database.update_metadata(
             db,
             document_id=document.id,
-            fields=metadata_data.fields
+            fields=edited_fields,
         )
 
         # Previously generated conclusions may contradict the operator's edits.
@@ -1215,14 +1300,6 @@ async def extract_metadata(
             raise HTTPException(status_code=404, detail="Document not found")
         verify_document_ownership(user, document)
 
-        if document.document_metadata is not None:
-            metadata = create_metadata_response(document.document_metadata)
-            return api_requests.MetadataExtractResponse(
-                success=True,
-                message="Metadata already extracted",
-                metadata_id=metadata.id,
-                metadata=metadata,
-            )
         if database.get_parsed_document(db, document_id) is None:
             if document.processing_status == 'processing':
                 raise HTTPException(status_code=409, detail="Document is still being prepared")
@@ -1621,57 +1698,26 @@ async def review_document_risks(document_id: int, profile: RiskProfile, authoriz
     description="Return a lightweight first-page preview for the document library",
 )
 async def get_document_preview(document_id: int, authorization: str = Header(...)):
-    """Render only the first page; never send the full document to a card preview."""
+    """Render the actual first page/image, including DOCX not yet viewed."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authentication scheme")
-    token = authorization.replace("Bearer ", "")
-    user, db = get_user_from_token(token)
+    user, db = get_user_from_token(authorization.removeprefix("Bearer "))
     try:
         document = database.get_document(db, document_id)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         verify_document_ownership(user, document)
         path = Path(document.stored_path) if document.stored_path else None
-        if not path or not path.exists():
-            raise HTTPException(status_code=404, detail="Original file is not available")
-        if path.suffix.lower() == '.pdf':
-            try:
-                with pymupdf.open(path) as pdf:
-                    if not pdf:
-                        raise ValueError("empty pdf")
-                    page = pdf[0]
-                    scale = min(1.0, 360 / max(page.rect.width, 1))
-                    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
-                    return Response(
-                        content=pixmap.tobytes('png'),
-                        media_type='image/png',
-                        headers={'Cache-Control': 'private, max-age=3600'},
-                    )
-            except Exception as exc:
-                logger.warning("Could not render PDF preview for %s: %s", document_id, exc)
-        if path.suffix.lower() in {'.jpg', '.jpeg', '.png'}:
-            try:
-                with Image.open(path) as source:
-                    image = ImageOps.exif_transpose(source).convert('RGB')
-                    image.thumbnail((960, 720))
-                    output = io.BytesIO()
-                    image.save(output, format='JPEG', quality=84, optimize=True)
-                return Response(
-                    content=output.getvalue(),
-                    media_type='image/jpeg',
-                    headers={'Cache-Control': 'private, max-age=3600'},
-                )
-            except Exception as exc:
-                logger.warning("Could not render image preview for %s: %s", document_id, exc)
-        parsed_document = database.get_parsed_document(db, document_id)
-        preview_text = parsed_document.text if parsed_document else ''
-        return Response(
-            content=create_text_preview_svg(document.filename or 'Документ', preview_text),
-            media_type='image/svg+xml',
-            headers={'Cache-Control': 'private, max-age=3600'},
-        )
     finally:
         db.close()
+    if not path or not path.is_file():
+        raise HTTPException(status_code=404, detail="Original file is not available")
+    try:
+        preview = await run_in_threadpool(render_preview, path)
+    except Exception as exc:
+        logger.warning("Could not render original preview for %s: %s", document_id, exc)
+        raise HTTPException(status_code=503, detail="Не удалось подготовить превью документа. Попробуйте ещё раз.") from exc
+    return Response(content=preview, media_type='image/png', headers={'Cache-Control': 'private, max-age=3600'})
 
 
 @app.get(

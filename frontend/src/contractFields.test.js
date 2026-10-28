@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fieldsForSave, fieldsToPlainObject, getFieldValue, updateFieldValue } from './contractFields.js';
+import { fieldNeedsReview, fieldsForSave, fieldsToPlainObject, getFieldValue, updateFieldValue } from './contractFields.js';
 
 test('operator amount with Russian decimal separator is exported as a number', () => {
   const original = { total_amount: { value: '100 000,50', currency: 'RUB' } };
@@ -43,4 +43,12 @@ test('copy and JSON export preserve the currency of a contract amount', () => {
 test('currency edits normalize codes and reject unreadable symbols', () => {
   assert.equal(fieldsForSave({ total_amount: { value: 100, currency: ' usd ' } }).total_amount.currency, 'USD');
   assert.throws(() => fieldsForSave({ total_amount: { value: 100, currency: '$' } }), /код валюты/);
+});
+
+test('PMI consistency failures and explicit backend statuses remain visible', () => {
+  assert.equal(fieldNeedsReview('total_amount', { value: 0, evidence: '0 рублей' }), true);
+  assert.equal(fieldNeedsReview('total_amount', { value: -100, evidence: '-100 рублей' }), true);
+  assert.equal(fieldNeedsReview('total_amount', { value: 100, evidence: '100', currency: null, status: 'found' }), false);
+  assert.equal(fieldNeedsReview('contract_date', { value: '2099-01-01', evidence: '01.01.2099' }), true);
+  assert.equal(fieldNeedsReview('total_amount', { value: 100, evidence: '100 рублей', status: 'needs_review', reason: 'Конфликт' }), true);
 });

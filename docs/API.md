@@ -19,8 +19,28 @@ http://your-api-base-url.com
 Most endpoints require authentication using a **session token**. Include the token in the `Authorization` header:
 
 ```
-Authorization: <your-session-token>
+Authorization: Bearer <your-session-token>
 ```
+
+---
+
+## Registry and batch operations
+
+`POST /documents/batch` accepts repeated multipart `files` (1–100), plus optional `folder_id` and `template_id`. HTTP 207 returns `accepted`, `rejected` and `results`; each item includes `filename`, `success`, `document_id`/`document`, or `error` and `status_code`. Valid items are processed even when another file is rejected. The original bytes are preserved.
+
+`GET /documents` accepts `page >= 1`, `limit` from 1 to 100, `folder_id`, `search`, `sort_by` (`created_at`, `contract_date`, `total_amount`) and `sort_order` (`asc`, `desc`). Sorting applies before pagination, missing values are last. Each row includes the extracted `fields` for the registry table. Search includes filenames and metadata, supports Cyrillic case folding and treats `%` and `_` as literal search characters.
+
+Uploads are extracted automatically by default. `POST /documents/{id}/analyze` repeats extraction without creating another document or metadata row. A running job returns 409. A database outage returns 503 with a readable JSON `detail`.
+
+`GET /documents/{id}` returns `metadata.field_statuses` with typed statuses `found`, `not_found`, `needs_review`, plus `reason`, `method`, `evidence`, `page_number` or `paragraph_number` and conflicting `candidates`. Scalar fields and individual parties also retain these annotations in `metadata.fields`. Party `role` keeps the document wording; `canonical_role` maps it to Заказчик/Исполнитель. Currency is populated only when supported by the cited text.
+
+`metadata.processing` records `processed_at`, `rules_version`, `rules_sha256`, dependency versions, backend, model/revision and processing parameters. LLM requests retain instructions/template and chunk messages or prompts in the saved metadata. `rules` uses no model. User edits clear citations for changed values and record `edited_at`/`edited_by`.
+
+The model identity is captured when loading the local model or making the provider request. `model_runtime` distinguishes MLX, Transformers and hosted calls; `model_revision_source` explains the revision origin, and `model_requested_revision` preserves a configured ref separately from the resolved commit. An unknown provider revision is JSON `null` with source `unknown`; it never inherits a local-model revision. A custom Hugging Face Space is identified by `space_id`, without guessing the model behind it. Model identity survives local model unloading.
+
+The live `/openapi.json` and `/docs` describe the current response models. [Acceptance checks](ACCEPTANCE.md) define the metric policy and verification scope.
+
+`GET /runtime/profile` is public and returns effective delivery settings, their `profile_sha256`, `rules_sha256`, `runtime_source_sha256` and dependency versions without credentials or storage paths. The pinned [PMI delivery profile](DELIVERY_PROFILE.md) is `pmi-rules-v1`. Each automatic extraction saves `delivery_profile`, `profile_sha256`, `docx_parser` and `runtime_source_sha256` in `metadata.processing`. In this profile only PDF/DOCX uploads are accepted, OCR is disabled and DOCX extraction uses native paragraphs/tables; visual DOCX previews still use LibreOffice.
 
 ---
 
@@ -587,6 +607,7 @@ All endpoints may return validation errors in the following format:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/ping` | Health check |
+| GET | `/runtime/profile` | Effective delivery profile and source hashes |
 | POST | `/auth/register` | Create new user |
 | POST | `/auth/login` | Login & get session token |
 | POST | `/auth/logout` | End session |

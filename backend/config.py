@@ -19,15 +19,19 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "development"
+    delivery_profile: Literal['custom', 'pmi-rules-v1'] = 'custom'
     database_url: str = "sqlite:///documents.db"
     document_storage_dir: Path = Path("uploads")
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     max_upload_size_mb: int = Field(default=50, ge=1, le=2048)
     max_pdf_pages: int = Field(default=200, ge=1, le=5000)
+    allow_ocr_uploads: bool = False
+    docx_use_rendered_pages: bool = False
+    auto_extract_uploads: bool = True
     max_job_attempts: int = Field(default=3, ge=1, le=10)
     job_worker_count: int = Field(default=1, ge=1, le=4)
     job_stale_after_minutes: int = Field(default=30, ge=1, le=1440)
-    extraction_backend: Literal["local", "huggingface-space", "api"] = "local"
+    extraction_backend: Literal["local", "huggingface-space", "api", "rules"] = "local"
     hf_space_id: str = "numind/NuExtract3"
     hf_space_api_name: str = "/on_extract_click"
     hf_space_prompt_mode: Literal["production", "compact"] = "compact"

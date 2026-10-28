@@ -48,6 +48,11 @@ export function updateFieldValue(fields, key, value) {
     }
     current.evidence = null;
     current.page_number = null;
+    current.paragraph_number = null;
+    current.status = 'needs_review';
+    current.reason = 'Значение изменено вручную';
+    current.method = 'manual';
+    delete current.candidates;
   } else {
     next[key] = value;
   }
@@ -135,17 +140,25 @@ export function formatFieldValue(key, field) {
 }
 
 export function partyNeedsReview(party) {
-  return !party?.name || !party?.inn || (!party?.name_evidence && !party?.inn_evidence);
+  if (party?.status) return party.status !== 'found';
+  return !party?.name || !party?.role || !party?.name_evidence;
 }
 
 export function fieldNeedsReview(key, field) {
   const value = getFieldValue(key, field);
   if (key === 'parties') {
-    return !Array.isArray(value) || value.length < 2 || value.some(partyNeedsReview);
+    const names = value.map?.((party) => party.name?.toLocaleLowerCase('ru').replace(/[«»"\s]/g, '')) ?? [];
+    const roles = new Set(value.map?.((party) => party.canonical_role).filter(Boolean) ?? []);
+    return !Array.isArray(value) || value.length < 2 || new Set(names).size !== names.length || value.some(partyNeedsReview) || (roles.size > 0 && (roles.size !== 2 || !roles.has('Заказчик') || !roles.has('Исполнитель')));
   }
+  if (field?.status) return field.status !== 'found';
   if (value === null || value === undefined || value === '') return true;
   if (!getFieldEvidence(key, field)) return true;
-  if (key === 'total_amount' && isStructuredField(field) && !field.currency) return true;
+  if (key === 'total_amount' && isStructuredField(field) && !(Number(field.value) > 0)) return true;
+  if (key === 'contract_date') {
+    const day = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(day.getTime()) || day > new Date()) return true;
+  }
   if (key === 'vat' && isStructuredField(field)) {
     return field.mode === 'not_stated' || /при наличии|если применим/i.test(field.raw_value ?? '');
   }

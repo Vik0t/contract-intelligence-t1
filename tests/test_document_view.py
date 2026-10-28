@@ -1,12 +1,13 @@
 from pathlib import Path
 import shutil
+import io
 
 import pymupdf
 import pytest
 from docx import Document
 from PIL import Image
 
-from backend.document_view import locate_evidence, page_count, render_page
+from backend.document_view import locate_evidence, page_count, render_page, render_preview
 
 
 def test_pdf_renders_original_page_and_locates_exact_fragment(tmp_path):
@@ -33,10 +34,23 @@ def test_docx_uses_real_rendered_pages(tmp_path):
     document.add_paragraph("Unique second page clause")
     document.save(path)
 
+    assert not Path(str(path) + '.rendered.pdf').exists()
+    # Cards render original DOCX even before the document viewer is opened.
+    with Image.open(io.BytesIO(render_preview(path))) as image:
+        assert image.width == 960
     assert page_count(path) == 2
     location = locate_evidence(path, "Unique second page clause", preferred_page=1)
     assert location["page"] == 2
     assert Path(str(path) + ".rendered.pdf").is_file()
+
+
+def test_png_preview_preserves_original_transparency_and_proportions(tmp_path):
+    path = tmp_path / 'source.png'
+    Image.new('RGBA', (480, 1200), (10, 100, 200, 100)).save(path)
+    with Image.open(io.BytesIO(render_preview(path))) as image:
+        assert image.size == (480, 1200)
+        assert image.mode == 'RGBA'
+        assert image.getpixel((20, 20)) == (10, 100, 200, 100)
 
 
 def test_unicode_pdf_hyphens_do_not_break_real_source_highlight(tmp_path):

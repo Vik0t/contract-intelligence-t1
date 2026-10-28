@@ -1,3 +1,17 @@
-html {
-  background: #ffffff;
+@font-face {
+  font-family: "ALS-Hauss";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/als_hauss_regular.woff2') format('woff2');
 }
+
+@font-face {
+  font-family: "ALS-Hauss";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./assets/fonts/als_hauss_medium.woff2') format('woff2');
+}
+
+html { background: #fff; }

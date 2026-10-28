@@ -28,6 +28,9 @@ def test_hf_chat_extraction_parses_and_postprocesses(monkeypatch) -> None:
     assert result["contract_number"]["value"]
     assert usage["total_tokens"] > 0
     assert captured["kwargs"]["provider"] == "hf"
+    assert result['_provenance']['model'] == captured['kwargs']['model'] == 'test-model'
+    assert result['_provenance']['model_runtime'] == 'hf-chat'
+    assert result['_provenance']['model_revision'] is None
     assert "PAGE 1" in captured["prompt"]
 
 

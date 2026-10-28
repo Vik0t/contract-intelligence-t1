@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import io
 from pathlib import Path
 import re
 import shutil
@@ -28,15 +29,14 @@ def view_pdf_path(source: str | Path) -> Path:
         return path
     if path.suffix.lower() != ".docx":
         raise ViewUnavailable("Для этого формата просмотр страниц недоступен")
-    configured = os.getenv("LIBREOFFICE_BIN", "").strip()
-    converter = configured if configured and Path(configured).is_file() else shutil.which("soffice") or shutil.which("libreoffice")
-    if not converter:
-        raise ViewUnavailable("Для просмотра DOCX с оформлением нужен LibreOffice на сервере")
-
     rendered = path.with_name(path.name + ".rendered.pdf")
     with _conversion_lock:
         if rendered.exists() and rendered.stat().st_mtime_ns >= path.stat().st_mtime_ns:
             return rendered
+        configured = os.getenv("LIBREOFFICE_BIN", "").strip()
+        converter = configured if configured and Path(configured).is_file() else shutil.which("soffice") or shutil.which("libreoffice")
+        if not converter:
+            raise ViewUnavailable("Для просмотра DOCX с оформлением нужен LibreOffice на сервере")
         # The converted PDF and its destination must share a filesystem:
         # /tmp and the persistent Docker documents volume can be different mounts.
         with tempfile.TemporaryDirectory(prefix=".contract-view-", dir=path.parent) as directory:
@@ -58,11 +58,29 @@ def view_pdf_path(source: str | Path) -> Path:
     return rendered
 
 
+def render_preview(source: str | Path) -> bytes:
+    """Render original first-page formatting at card/retina resolution."""
+    path = Path(source)
+    if path.suffix.lower() in {'.png', '.jpg', '.jpeg'}:
+        with Image.open(path) as original:
+            image = ImageOps.exif_transpose(original)
+            image = image.convert('RGBA' if 'A' in image.getbands() or 'transparency' in image.info else 'RGB')
+            image.thumbnail((960, 19200))
+            output = io.BytesIO()
+            image.save(output, format='PNG')
+            return output.getvalue()
+    with pymupdf.open(view_pdf_path(path)) as pdf:
+        if not pdf:
+            raise ViewUnavailable('Документ не содержит страниц')
+        page = pdf[0]
+        scale = min(2.0, 960 / max(page.rect.width, 1))
+        return page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes('png')
+
+
 def render_page(source: str | Path, number: int) -> bytes:
     if Path(source).suffix.lower() in {".png", ".jpg", ".jpeg"}:
         if number != 1:
             raise IndexError("Страница не найдена")
-        import io
         with Image.open(source) as original:
             image = ImageOps.exif_transpose(original).convert("RGB")
             image.thumbnail((1400, 1400 * 20))

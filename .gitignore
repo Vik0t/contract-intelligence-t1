@@ -12,6 +12,7 @@ venv
 !.env.example
 !.env.server.example
 !.env.api.example
+!.env.rules.example
 uploads/
 *.txt
 !frontend/package.json

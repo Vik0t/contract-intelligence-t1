@@ -112,7 +112,7 @@ def assess_fields(result: dict[str, Any], text: str = "", *, document=None,
             currency = item.get("currency")
             currency_patterns = {"RUB": r"RUB|руб|₽", "USD": r"USD|доллар|\$", "EUR": r"EUR|евро|€",
                                  "CNY": r"CNY|юан|¥", "KZT": r"KZT|тенге|₸", "GBP": r"GBP|фунт|£"}
-            if currency and not re.search(currency_patterns.get(currency, re.escape(currency)), evidence, re.I):
+            if currency and item.get('method') != 'manual' and not re.search(currency_patterns.get(currency, re.escape(currency)), evidence, re.I):
                 item["currency"] = None
             candidates = total_candidates(text)
             if len({candidate["value"] for candidate in candidates}) > 1:

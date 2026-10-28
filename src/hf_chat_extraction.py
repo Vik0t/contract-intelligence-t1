@@ -12,6 +12,7 @@ from src.extraction.schema import CONTRACT_TEMPLATE, INSTRUCTIONS
 from src.extraction.summary import generate_chat
 from src.hf_space_extraction import build_retrieved_context
 from src.extraction.validation import validate_model_result
+from src.extraction.provenance import model_identity
 
 
 def extract_fields_with_hf_chat(
@@ -46,6 +47,9 @@ def extract_fields_with_hf_chat(
     if document_ir is not None:
         result = validate_extraction(result, document_ir)
     result = validate_model_result(result, text)
+    result['_provenance'] = {**model_identity(model, 'hf-chat'), 'provider': 'hf',
+                             'instructions': INSTRUCTIONS, 'template': CONTRACT_TEMPLATE, 'prompts': [prompt],
+                             'parameters': {'context_chars': context_chars, 'max_new_tokens': max_tokens, 'temperature': 0.0}}
     prompt_tokens = len(prompt.split())
     completion_tokens = len(raw.split())
     return result, {
