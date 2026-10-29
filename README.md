@@ -138,7 +138,7 @@ docker compose --env-file .env.rules -f compose.yaml -f compose.rules.yaml up -d
 curl --fail http://127.0.0.1:8080/api/health/ready
 ```
 
-Генератор синтетических договоров, правила подсчёта четырёх приёмочных метрик и команды испытаний приведены в [Проверке по ТЗ и ПМИ](docs/ACCEPTANCE.md).
+Релиз **`v1.0.0`** включает [замороженный контрольный набор с эталонами](evals/pmi-control-v1/README.md): 36 синтетических договоров, 24 development / 12 holdout, каждый в PDF и DOCX. [Команды воспроизведения](docs/RELEASE_v1.0.0.md) и [правила подсчёта четырёх приёмочных метрик](docs/ACCEPTANCE.md) входят в репозиторий.
 
 Локальный сервер с NVIDIA GPU:
 

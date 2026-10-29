@@ -58,7 +58,7 @@ async def lifespan(_app):
 app = FastAPI(
     title="T1 Contract Intelligence",
     description="Extracting important info from contracts",
-    version="1.1.0",
+    version="1.0.0",
     root_path=os.getenv("API_ROOT_PATH", ""),
     lifespan=lifespan,
 )
@@ -1134,7 +1134,11 @@ async def analyze_document(
         if database.get_parsed_document(db, document_id) is None:
             if document.processing_status == 'processing':
                 raise HTTPException(status_code=409, detail="Document is still being prepared")
-            raise HTTPException(status_code=400, detail="Document is not ready for analysis")
+            if document.processing_status == 'failed' and document.stored_path and Path(document.stored_path).is_file():
+                document = database.update_document(db, document.id, processing_status='processing', processing_error=None)
+                JOB_MANAGER.enqueue(document.id, 'parse')
+                return create_document_response(document)
+            raise HTTPException(status_code=400, detail="Не удалось подготовить текст. Загрузите документ снова.")
         if document.processing_status == 'processing':
             raise HTTPException(status_code=409, detail="Analysis is already running")
 

@@ -1406,3 +1406,36 @@ def test_operator_amount_edit_retains_currency_without_claiming_old_source():
     assert amount['method'] == 'manual' and amount['status'] == 'needs_review'
     assert not amount.get('evidence')
     assert client.get(f'/documents/{document_id}', headers=headers).json()['metadata']['fields']['total_amount']['currency'] == 'USD'
+
+
+def test_retry_after_parsing_failure_reuses_original_file(monkeypatch):
+    headers = get_auth_header()
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        original = app_module.STORAGE_ROOT / 'retry.pdf'
+        original.write_bytes(b'%PDF-1.4 synthetic fixture')
+        doc = database.create_document(db, owner=user.id, template_id=None, filename='retry.pdf')
+        database.update_document(db, doc.id, stored_path=str(original), processing_status='failed', processing_error='Reading failed')
+        ident = doc.id
+    queued = []
+    monkeypatch.setattr(app_module.JOB_MANAGER, 'enqueue', lambda document_id, kind: queued.append((document_id, kind)))
+    response = client.post(f'/documents/{ident}/analyze', headers=headers)
+    assert response.status_code == 200
+    assert response.json()['status'] == 'processing'
+    assert response.json()['processing_error'] is None
+    assert queued == [(ident, 'parse')]
+    assert original.is_file()
+    assert client.post(f'/documents/{ident}/analyze', headers=headers).status_code == 409
+    assert queued == [(ident, 'parse')]
+
+
+def test_retry_without_original_explains_recovery():
+    headers = get_auth_header()
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        doc = database.create_document(db, owner=user.id, template_id=None, filename='missing.pdf')
+        database.update_document(db, doc.id, processing_status='failed')
+        ident = doc.id
+    response = client.post(f'/documents/{ident}/analyze', headers=headers)
+    assert response.status_code == 400
+    assert 'Загрузите документ снова' in response.json()['detail']

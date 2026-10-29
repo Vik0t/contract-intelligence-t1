@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, API_PREFIX, authHeaders, friendlyError, request } from './api.js';
 import AuthView from './components/AuthView.jsx';
 import DocumentLibrary from './components/DocumentLibrary.jsx';
@@ -18,7 +18,7 @@ function getSavedUser() {
 }
 
 export default function App() {
-  const [confirmAction, confirmationDialog] = useConfirmation();
+  const [confirmAction, confirmationDialog, cancelConfirmation] = useConfirmation();
   const [token, setToken] = useState(() => localStorage.getItem('contract_token'));
   const [user, setUser] = useState(getSavedUser);
   const [authMode, setAuthMode] = useState('login');
@@ -48,6 +48,12 @@ export default function App() {
   const activeTokenRef = useRef(token);
   const openRequestIdRef = useRef(0);
   const libraryPositionRef = useRef(null);
+  const documentRevisionRef = useRef(0);
+  const selectedDocumentRef = useRef(selectedDocument);
+  useLayoutEffect(() => { selectedDocumentRef.current = selectedDocument; }, [selectedDocument]);
+  const libraryQuery = useMemo(() => ({ page, viewStatus, selectedFolderId, debouncedSearch, sortBy, sortOrder }), [page, viewStatus, selectedFolderId, debouncedSearch, sortBy, sortOrder]);
+  const libraryQueryRef = useRef(libraryQuery);
+  useLayoutEffect(() => { libraryQueryRef.current = libraryQuery; }, [libraryQuery]);
 
   useLayoutEffect(() => {
     if (!token || selectedDocument || libraryLoading || libraryError || !libraryPositionRef.current) return undefined;
@@ -68,18 +74,16 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, [selectedDocument?.id, token, libraryLoading, libraryError]);
 
-  const clearSession = useCallback(() => {
-    if (activeTokenRef.current !== token) return;
-    activeTokenRef.current = null;
+  const resetWorkspace = useCallback(() => {
+    cancelConfirmation();
     libraryRequestIdRef.current += 1;
+    documentRevisionRef.current += 1;
     autoAnalyzeIdsRef.current.clear();
     openRequestIdRef.current += 1;
     libraryPositionRef.current = null;
     setOpeningDocumentId(null);
-    localStorage.removeItem('contract_token');
-    localStorage.removeItem('contract_user');
-    setToken(null);
-    setUser(null);
+    setAuthMode('login');
+    setAuthForm({ username: '', email: '', password: '' });
     setSelectedDocument(null);
     setDocuments([]);
     setFolders([]);
@@ -96,7 +100,35 @@ export default function App() {
     setSearch('');
     setDebouncedSearch('');
     setUploading(false);
-  }, [token]);
+  }, [cancelConfirmation]);
+
+  const clearSession = useCallback(() => {
+    if (activeTokenRef.current !== token) return;
+    activeTokenRef.current = null;
+    localStorage.removeItem('contract_token');
+    localStorage.removeItem('contract_user');
+    setToken(null);
+    setUser(null);
+    resetWorkspace();
+  }, [token, resetWorkspace]);
+
+  useEffect(() => {
+    const syncSession = event => {
+      if (event.key === 'contract_user') {
+        setUser(activeTokenRef.current ? getSavedUser() : null);
+        return;
+      }
+      if (event.key !== 'contract_token' && event.key !== null) return;
+      const savedToken = localStorage.getItem('contract_token');
+      if (savedToken === activeTokenRef.current) return;
+      activeTokenRef.current = savedToken;
+      resetWorkspace();
+      setToken(savedToken);
+      setUser(savedToken ? getSavedUser() : null);
+    };
+    window.addEventListener('storage', syncSession);
+    return () => window.removeEventListener('storage', syncSession);
+  }, [resetWorkspace]);
 
   const logout = useCallback(async () => {
     try {
@@ -114,8 +146,10 @@ export default function App() {
 
   const loadLibrary = useCallback(async ({ showLoading = true } = {}) => {
     if (!token || activeTokenRef.current !== token) return;
+    const currentQuery = libraryQueryRef.current;
+    const { page, viewStatus, selectedFolderId, debouncedSearch, sortBy, sortOrder } = currentQuery;
     const requestId = ++libraryRequestIdRef.current;
-    if (showLoading) setLibraryLoading(true);
+    if (showLoading) { setLibraryLoading(true); setDocuments([]); }
     try {
       const query = new URLSearchParams({ page: String(page), limit: '50', view_status: viewStatus });
       query.set('sort_by', sortBy);
@@ -130,7 +164,7 @@ export default function App() {
         request(`/documents?${query.toString()}`, { headers: authHeaders(token) }),
         rootCountRequest,
       ]);
-      if (requestId !== libraryRequestIdRef.current) return;
+      if (requestId !== libraryRequestIdRef.current || currentQuery !== libraryQueryRef.current || activeTokenRef.current !== token) return;
       setFolders(folderResult.folders ?? []);
       setDocuments(documentResult.documents ?? []);
       setTotalDocuments(rootCountResult?.total ?? documentResult.total ?? 0);
@@ -139,15 +173,15 @@ export default function App() {
       if (page > lastPage) setPage(lastPage);
       setLibraryError('');
     } catch (requestError) {
-      if (requestId !== libraryRequestIdRef.current) return;
+      if (requestId !== libraryRequestIdRef.current || currentQuery !== libraryQueryRef.current || activeTokenRef.current !== token) return;
       if (requestError.status === 401) { clearSession(); setError(friendlyError(requestError)); }
       else setLibraryError(friendlyError(requestError));
     } finally {
       if (requestId === libraryRequestIdRef.current) setLibraryLoading(false);
     }
-  }, [clearSession, debouncedSearch, selectedFolderId, sortBy, sortOrder, token, page, viewStatus]);
+  }, [clearSession, token]);
 
-  useEffect(() => { void loadLibrary(); }, [loadLibrary]);
+  useEffect(() => { void loadLibrary(); }, [loadLibrary, libraryQuery]);
 
   const hasProcessingDocuments = documents.some((document) => document.status === 'processing' || document.status === 'uploaded');
   useEffect(() => {
@@ -156,21 +190,22 @@ export default function App() {
     return () => window.clearInterval(intervalId);
   }, [hasProcessingDocuments, loadLibrary, token, viewStatus]);
 
-  const runningRiskDocumentId = selectedDocument?.metadata?.risk_review?.status === 'running' ? selectedDocument.id : null;
+  const watchedDocumentId = selectedDocument && (['processing', 'uploaded'].includes(selectedDocument.status) || selectedDocument.metadata?.risk_review?.status === 'running') ? selectedDocument.id : null;
   useEffect(() => {
-    if (!token || !runningRiskDocumentId) return undefined;
+    if (!token || !watchedDocumentId) return undefined;
     const controller = new AbortController();
     const intervalId = window.setInterval(async () => {
+      const revision = documentRevisionRef.current;
       try {
-        const updated = await request(`/documents/${runningRiskDocumentId}`, { headers: authHeaders(token), signal: controller.signal });
-        if (activeTokenRef.current !== token || controller.signal.aborted) return;
-        setSelectedDocument((current) => current?.id === runningRiskDocumentId && current.metadata?.risk_review?.status === 'running' ? updated : current);
+        const updated = await request(`/documents/${watchedDocumentId}`, { headers: authHeaders(token), signal: controller.signal });
+        if (activeTokenRef.current !== token || controller.signal.aborted || revision !== documentRevisionRef.current) return;
+        setSelectedDocument((current) => current?.id === watchedDocumentId && (['processing', 'uploaded'].includes(current.status) || current.metadata?.risk_review?.status === 'running') ? updated : current);
       } catch (requestError) {
         if (!controller.signal.aborted && activeTokenRef.current === token && requestError.status === 401) clearSession();
       }
     }, 3000);
     return () => { window.clearInterval(intervalId); controller.abort(); };
-  }, [runningRiskDocumentId, token, clearSession]);
+  }, [watchedDocumentId, token, clearSession]);
 
   const openDocument = useCallback(async (document) => {
     const requestId = ++openRequestIdRef.current;
@@ -196,12 +231,14 @@ export default function App() {
   const analyzeDocument = useCallback(async (document) => {
     if (document.has_metadata && !await confirmAction({ title:'Извлечь данные заново?', description:'Текущие исправления и подтверждение будут заменены новым результатом. Оригинал документа сохранится.', confirmLabel:'Извлечь заново' })) return;
     setError('');
+    const navigation = openRequestIdRef.current;
     try {
       await request(`/documents/${document.id}/analyze`, { method: 'POST', headers: authHeaders(token) });
       if (activeTokenRef.current !== token) return;
       await loadLibrary({ showLoading: false });
-      if (selectedDocument?.id === document.id) await openDocument(document);
+      if (selectedDocumentRef.current?.id === document.id && navigation === openRequestIdRef.current) await openDocument(document);
     } catch (requestError) {
+      if (activeTokenRef.current !== token) return;
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
     }
@@ -224,26 +261,28 @@ export default function App() {
       && summary.review_status === selectedDocument.review_status
     )) return undefined;
     let cancelled = false;
+    const revision = documentRevisionRef.current;
     request(`/documents/${selectedDocument.id}`, { headers: authHeaders(token) })
-      .then((document) => { if (!cancelled) setSelectedDocument(document); })
+      .then((document) => { if (!cancelled && revision === documentRevisionRef.current && activeTokenRef.current === token) setSelectedDocument(document); })
       .catch((requestError) => { if (!cancelled && requestError.status === 401) clearSession(); });
     return () => { cancelled = true; };
   }, [clearSession, documents, selectedDocument, token]);
 
-  const waitingForInsights = Boolean(selectedDocument?.has_metadata && selectedDocument.metadata?.processing?.backend !== 'rules' && (!selectedDocument.metadata?.summary || !Array.isArray(selectedDocument.metadata?.risks)));
+  const waitingForInsights = Boolean(selectedDocument?.has_metadata && selectedDocument.metadata?.processing?.backend !== 'rules' && !selectedDocument.metadata?.summary);
   useEffect(() => {
     if (!token || !selectedDocument?.id || !waitingForInsights) return undefined;
     const documentId = selectedDocument.id;
     const started = Date.now();
     let cancelled = false;
     const intervalId = window.setInterval(async () => {
+      const revision = documentRevisionRef.current;
       if (Date.now() - started > 125_000) {
         window.clearInterval(intervalId);
         return;
       }
       try {
         const updated = await request(`/documents/${documentId}`, { headers: authHeaders(token) });
-        if (!cancelled) setSelectedDocument((current) => current?.id === documentId ? updated : current);
+        if (!cancelled && activeTokenRef.current === token && revision === documentRevisionRef.current) setSelectedDocument((current) => current?.id === documentId ? updated : current);
       } catch (requestError) {
         if (!cancelled && requestError.status === 401) clearSession();
       }
@@ -260,6 +299,7 @@ export default function App() {
     event.preventDefault();
     setAuthLoading(true);
     setError('');
+    let failed = false;
     try {
       if (authMode === 'register') await request('/auth/register', { method: 'POST', body: JSON.stringify(authForm) });
       const session = await request('/auth/login', { method: 'POST', body: JSON.stringify({ username: authForm.username, password: authForm.password }) });
@@ -270,9 +310,14 @@ export default function App() {
       setUser(session.user);
       setAuthForm({ username: '', email: '', password: '' });
     } catch (requestError) {
+      failed = true;
       setError(friendlyError(requestError));
     } finally {
       setAuthLoading(false);
+      requestAnimationFrame(() => {
+        const target = failed ? window.document.getElementById(authMode === 'login' ? 'auth-password' : 'auth-username') : window.document.getElementById('main-content');
+        target?.focus();
+      });
     }
   };
 
@@ -281,7 +326,9 @@ export default function App() {
     try {
       const response = await fetch(`${API_PREFIX}/documents/${document.id}/file`, { headers: authHeaders(token) });
       if (!response.ok) throw new ApiError('Не удалось открыть исходный файл', response.status);
-      const blobUrl = URL.createObjectURL(await response.blob());
+      const blob = await response.blob();
+      if (activeTokenRef.current !== token) return;
+      const blobUrl = URL.createObjectURL(blob);
       const link = window.document.createElement('a');
       link.href = blobUrl;
       link.download = document.filename || 'document';
@@ -290,6 +337,8 @@ export default function App() {
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (requestError) {
+      if (activeTokenRef.current !== token) return;
+      if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
     }
   };
@@ -297,6 +346,8 @@ export default function App() {
   const handleUpload = async (input) => {
     const files = Array.isArray(input) ? input : input ? [input] : [];
     if (!files.length || !token) return;
+    const uploadQuery = libraryQueryRef.current;
+    const uploadNavigation = openRequestIdRef.current;
     setUploading(true);
     setError('');
     setUploadMessage(`Загружаем: ${files.map(file => file.name).join(', ')}`);
@@ -308,13 +359,18 @@ export default function App() {
       if (activeTokenRef.current !== token) return;
       await loadLibrary({ showLoading: false });
       const accepted = upload.results.filter((item) => item.success);
-      setUploadMessage(`Загружено ${accepted.length} из ${files.length}. Статус обработки показан в реестре.`);
-      setPage(1);
-      setViewStatus('all');
-      if (files.length === 1 && accepted.length === 1) await openDocument({ id: accepted[0].document_id });
+      setUploadMessage(`Загружено ${accepted.length} из ${files.length}.`);
+      if (libraryQueryRef.current === uploadQuery && openRequestIdRef.current === uploadNavigation) {
+        setPage(1);
+        setViewStatus('all');
+        setSearch('');
+        setDebouncedSearch('');
+        if (files.length === 1 && accepted.length === 1) await openDocument({ id: accepted[0].document_id });
+      }
       const rejected = upload.results.filter((item) => !item.success);
       if (rejected.length) setError(rejected.map((item) => `${item.filename}: ${item.error}`).join('; '));
     } catch (requestError) {
+      if (activeTokenRef.current !== token) return;
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
       setUploadMessage('');
@@ -326,9 +382,17 @@ export default function App() {
   const createFolder = async (name) => {
     try {
       const folder = await request('/folders', { method: 'POST', headers: authHeaders(token), body: JSON.stringify({ name }) });
+      if (activeTokenRef.current !== token) return false;
       setSelectedFolderId(folder.id);
+      setPage(1);
+      setSearch('');
+      setDebouncedSearch('');
+      setViewStatus('all');
+      setError('');
       return true;
     } catch (requestError) {
+      if (activeTokenRef.current !== token) return false;
+      if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
       return false;
     }
@@ -338,9 +402,12 @@ export default function App() {
     if (!await confirmAction({ title:`Удалить папку «${folder.name}»?`, description:'Документы останутся в общем списке.', confirmLabel:'Удалить папку', danger:true })) return;
     try {
       await request(`/folders/${folder.id}`, { method: 'DELETE', headers: authHeaders(token) });
-      if (selectedFolderId === folder.id) setSelectedFolderId(null);
+      if (activeTokenRef.current !== token) return;
+      setSelectedFolderId(current => current === folder.id ? null : current);
       await loadLibrary();
     } catch (requestError) {
+      if (activeTokenRef.current !== token) return;
+      if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
     }
   };
@@ -348,8 +415,11 @@ export default function App() {
   const moveDocument = async (documentId, folderId) => {
     try {
       await request(`/documents/${documentId}`, { method: 'PATCH', headers: authHeaders(token), body: JSON.stringify({ folder_id: folderId }) });
+      if (activeTokenRef.current !== token) return;
       await loadLibrary({ showLoading: false });
     } catch (requestError) {
+      if (activeTokenRef.current !== token) return;
+      if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
     }
   };
@@ -358,9 +428,12 @@ export default function App() {
     if (!await confirmAction({ title:'Удалить документ?', description:`«${document.filename}» и результат обработки будут удалены без возможности восстановления.`, confirmLabel:'Удалить документ', danger:true })) return;
     try {
       await request(`/documents/${document.id}`, { method: 'DELETE', headers: authHeaders(token) });
-      if (selectedDocument?.id === document.id) setSelectedDocument(null);
+      if (activeTokenRef.current !== token) return;
+      setSelectedDocument(current => current?.id === document.id ? null : current);
       await loadLibrary();
     } catch (requestError) {
+      if (activeTokenRef.current !== token) return;
+      if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
     }
   };
@@ -370,9 +443,11 @@ export default function App() {
     try {
       const updated = await request(`/documents/${document.id}/metadata`, { method: 'PATCH', headers: authHeaders(token), body: JSON.stringify({ fields: fieldsForSave(fields) }) });
       if (activeTokenRef.current !== token) return;
+      documentRevisionRef.current += 1;
       setSelectedDocument((current) => current?.id === document.id ? updated : current);
       await loadLibrary({ showLoading: false });
     } catch (requestError) {
+      if (activeTokenRef.current !== token) throw requestError;
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
       throw requestError;
@@ -387,9 +462,11 @@ export default function App() {
         body: JSON.stringify({ confirmed }),
       });
       if (activeTokenRef.current !== token) return;
+      documentRevisionRef.current += 1;
       setSelectedDocument((current) => current?.id === document.id ? updated : current);
       await loadLibrary({ showLoading: false });
     } catch (requestError) {
+      if (activeTokenRef.current !== token) throw requestError;
       if (requestError.status === 401) clearSession();
       setError(friendlyError(requestError));
       throw requestError;
@@ -398,11 +475,16 @@ export default function App() {
 
   const refreshDocumentInsights = async (document) => {
     setError('');
+    const revision = documentRevisionRef.current;
     try {
       const result = await request(`/documents/${document.id}/insights`, { method: 'POST', headers: authHeaders(token) });
       if (activeTokenRef.current !== token) return result;
       const updated = await request(`/documents/${document.id}`, { headers: authHeaders(token) });
-      setSelectedDocument((current) => current?.id === document.id ? updated : current);
+      if (activeTokenRef.current !== token) return result;
+      if (revision === documentRevisionRef.current) {
+        documentRevisionRef.current += 1;
+        setSelectedDocument((current) => current?.id === document.id ? updated : current);
+      }
       return result;
     } catch (requestError) {
       if (activeTokenRef.current !== token) throw requestError;
@@ -415,16 +497,34 @@ export default function App() {
   const reviewDocumentRisks = async (document, profile) => {
     setError('');
     const pending = { status: 'running', profile };
+    const revision = ++documentRevisionRef.current;
     setSelectedDocument((current) => current?.id === document.id ? { ...current, metadata: { ...current.metadata, risks: null, risk_review: pending } } : current);
     try {
       const result = await request(`/documents/${document.id}/risks`, { method: 'POST', headers: authHeaders(token), body: JSON.stringify(profile) });
       if (activeTokenRef.current !== token) return;
-      setSelectedDocument((current) => current?.id === document.id && current.metadata?.risk_review === pending ? { ...current, metadata: result.metadata } : current);
+      if (revision === documentRevisionRef.current) {
+        documentRevisionRef.current += 1;
+        setSelectedDocument((current) => current?.id === document.id ? { ...current, metadata: result.metadata } : current);
+      }
       return result;
     } catch (requestError) {
       if (activeTokenRef.current === token) {
         if (requestError.status === 401) clearSession();
-        setSelectedDocument((current) => current?.id === document.id && current.metadata?.risk_review === pending ? { ...current, metadata: { ...current.metadata, risk_review: { ...pending, status: 'failed' } } } : current);
+        else {
+          // A rejected request must not erase an earlier report. A disconnected
+          // request may still be running on the server, so reconcile its state.
+          let actualMetadata;
+          try {
+            const actual = await request(`/documents/${document.id}`, { headers: authHeaders(token) });
+            actualMetadata = actual.metadata;
+          } catch (recoveryError) {
+            if (recoveryError.status === 401) clearSession();
+          }
+          if (activeTokenRef.current === token && revision === documentRevisionRef.current) {
+            documentRevisionRef.current += 1;
+            setSelectedDocument((current) => current?.id === document.id ? { ...current, metadata: actualMetadata ?? { ...current.metadata, risks: document.metadata?.risks, risk_review: document.metadata?.risk_review } } : current);
+          }
+        }
       }
       throw new Error(friendlyError(requestError));
     }
@@ -433,6 +533,8 @@ export default function App() {
   const leaveWorkspace = async (action) => {
     if (workspaceDirty && !await confirmAction({title:'Есть несохранённые изменения',description:'Сохраните правку или продолжите редактирование. Если выйти сейчас, изменения этого поля потеряются.',confirmLabel:'Выйти без сохранения',cancelLabel:'Продолжить редактирование'})) return;
     setWorkspaceDirty(false);
+    openRequestIdRef.current += 1;
+    setOpeningDocumentId(null);
     action();
   };
 

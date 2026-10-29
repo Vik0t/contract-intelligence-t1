@@ -24,3 +24,11 @@ tmp
 *.log
 !meta/README.md
 !meta/schema.json
+
+# Frozen fictional PMI corpus shipped with the release (not user uploads).
+!evals/pmi-control-v1/manifest.json
+!evals/pmi-control-v1/*.pdf
+!evals/pmi-control-v1/*.docx
+!evals/pmi-control-v1/results/v1.0.0-http.json
+
+.DS_Store

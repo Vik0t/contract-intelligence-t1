@@ -1,0 +1,1232 @@
+{
+  "version": 1,
+  "seed": 20261027,
+  "generator_sha256": "a534f1987d6d43d5dcc2b0ce169743e785f3a53bfab24dfb26a8555b1c0327e6",
+  "gold_review": "pending_manual_review",
+  "documents": [
+    {
+      "id": 1,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_001.pdf",
+        "docx": "contract_001.docx"
+      },
+      "sha256": {
+        "pdf": "15095b95d2b93bb6f9a72075c2fcc0bcb42374317db8287960e6b2065d8e3dea",
+        "docx": "0ed46eab1677b0199c45047c98d3ddeda38352b2635a2f89b0b967b23a17b525"
+      },
+      "gold": {
+        "contract_number": "256/001-Т",
+        "contract_date": "2026-01-26",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 001\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 001",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 142000.25,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_002.pdf",
+        "docx": "contract_002.docx"
+      },
+      "sha256": {
+        "pdf": "97c80b024231c04520f963ec885b1751f59dc10513f5a3b8740b7f4d4b6c54e9",
+        "docx": "38cb26b7fe9c2114fec9068f591370ba3a5c99d85a04a00ae66e92e4eabcd992"
+      },
+      "gold": {
+        "contract_number": "712/002-Т",
+        "contract_date": "2026-04-14",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 002\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 002",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 113000.3,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_003.pdf",
+        "docx": "contract_003.docx"
+      },
+      "sha256": {
+        "pdf": "85d007c9f893b2ddff6f99f9bf069ed536bd519c946215d4c82e183277c31f64",
+        "docx": "60c943644d34d4c9ddb8515e1afaa993c1ada07822f1be79ad8f059cd799ca6b"
+      },
+      "gold": {
+        "contract_number": "126/003-Т",
+        "contract_date": "2026-01-16",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 003\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 003",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 441000.54,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 4,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_004.pdf",
+        "docx": "contract_004.docx"
+      },
+      "sha256": {
+        "pdf": "0624a9c605c87a8850d71dfa8e67f1105f0c66219dbbdb64a82c0bb5ba280b00",
+        "docx": "361051ad33c534a459b58746ae213c91eda1820f48a7885abe01d6ac46e07e8c"
+      },
+      "gold": {
+        "contract_number": "667/004-Т",
+        "contract_date": "2026-01-03",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 004\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 004",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 756000.56,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_005.pdf",
+        "docx": "contract_005.docx"
+      },
+      "sha256": {
+        "pdf": "43b3ad5aaf991fe7706aa53bc1cb88f0d2f46b67fd63b45e4d9f210dc4410f2d",
+        "docx": "d58fa2d2ed1db2857bdf55f9c4c9c688973e3fb7cfe9a1dea77986a46a5ffe41"
+      },
+      "gold": {
+        "contract_number": "338/005-Т",
+        "contract_date": "2026-08-24",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 005\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 005",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 732000.27,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_006.pdf",
+        "docx": "contract_006.docx"
+      },
+      "sha256": {
+        "pdf": "b0b99a539fd334c6d4d4cbdcc80f566ab68224aa6251c307a33ac6b2d550952f",
+        "docx": "8aeeaf5518bcf70f1a1fafaaed822dd2ae5dab0a4ae3fffc9a55d2c5fb7c0d17"
+      },
+      "gold": {
+        "contract_number": "361/006-Т",
+        "contract_date": "2026-07-27",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 006\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 006",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 187000.26,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 7,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_007.pdf",
+        "docx": "contract_007.docx"
+      },
+      "sha256": {
+        "pdf": "e578a7bf96677ab40ecaec662334c7400b66c1a3081615a2ec4714043fcdb672",
+        "docx": "fdbab38826363410c2ffb1c655d05d180aeb681b46a58d22ae19925f92c7dec9"
+      },
+      "gold": {
+        "contract_number": "596/007-Т",
+        "contract_date": "2026-06-14",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 007\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 007",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 142000.34,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_008.pdf",
+        "docx": "contract_008.docx"
+      },
+      "sha256": {
+        "pdf": "515f092f392cab77ae8e501bbc7578dc1361976f742b2111569b3c2fe0e15519",
+        "docx": "4b7ef307451cdf55dd6e12ff2a880e4b44fc511bbf56f9638175d2321524ff8b"
+      },
+      "gold": {
+        "contract_number": "477/008-Т",
+        "contract_date": "2026-06-03",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 008\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 008",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 21000.16,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "split": "holdout",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_009.pdf",
+        "docx": "contract_009.docx"
+      },
+      "sha256": {
+        "pdf": "f4b05ccd5dd73fe83640de89f587e9d8d81b3d437273388fa9b711d899f38b4b",
+        "docx": "05d1d03c61d7272b2dc1ff69f323e844298b39a3fa35fad5f7bef46364dec925"
+      },
+      "gold": {
+        "contract_number": "773/009-Т",
+        "contract_date": "2026-04-09",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 009\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 009",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 323000.73,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 10,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_010.pdf",
+        "docx": "contract_010.docx"
+      },
+      "sha256": {
+        "pdf": "2534c4eedeb5c8977a0d640cd8ba577a310ad7b80d8b8584b290615bb255cd3a",
+        "docx": "565a5459a7134f2593ae87af068356f7fd462db0bdeaeffb0a3803aed1698b06"
+      },
+      "gold": {
+        "contract_number": "762/010-Т",
+        "contract_date": "2026-09-21",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 010\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 010",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 203000.35,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_011.pdf",
+        "docx": "contract_011.docx"
+      },
+      "sha256": {
+        "pdf": "3610e1133cb9e74d080bb83e412218c1c1f60f578879c2cb48c68e268be1b8df",
+        "docx": "7e1ed3508e29147e7e2081c0b2eb1fe10d4edd826a58f97b4883068465462f02"
+      },
+      "gold": {
+        "contract_number": "185/011-Т",
+        "contract_date": "2026-05-05",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 011\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 011",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 546000.97,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_012.pdf",
+        "docx": "contract_012.docx"
+      },
+      "sha256": {
+        "pdf": "7a0a441dbef438788e5326828e78328ef006427208a4ff8d3c70dcb0cad756f1",
+        "docx": "af11e49a3705adf03db0c9f426ca1a103d40328e5e5874eb2e6b5a9d0d75c3a9"
+      },
+      "gold": {
+        "contract_number": "499/012-Т",
+        "contract_date": "2026-06-19",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 012\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 012",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 384000.91,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 13,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_013.pdf",
+        "docx": "contract_013.docx"
+      },
+      "sha256": {
+        "pdf": "012fd0df6779861f1045f932c29128ca87a033a1a507c143e430932a4f77c9fc",
+        "docx": "bd789d99590b1e92f98c6afa972e0cf2be277a0406000fa1c837d8b128e02ed8"
+      },
+      "gold": {
+        "contract_number": "699/013-Т",
+        "contract_date": "2026-02-13",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 013\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 013",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 591000.77,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_014.pdf",
+        "docx": "contract_014.docx"
+      },
+      "sha256": {
+        "pdf": "63eaa0786573a1c1506232ed79c9105612b0ad192d118789efd5d320db69ed19",
+        "docx": "61dcee6bd65b24c8818f8916cc330b3ccde1b20aa203562e47ea55ff1586645c"
+      },
+      "gold": {
+        "contract_number": "822/014-Т",
+        "contract_date": "2026-07-21",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 014\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 014",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 778000.42,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_015.pdf",
+        "docx": "contract_015.docx"
+      },
+      "sha256": {
+        "pdf": "5107cc1216ecad267497fe835ddf6bcd12d5cc6dfeb913f679125794b6f66b7e",
+        "docx": "b1092063503321f2b8872695ee28f798eedceed8a27fd30673ec8d8191ddc059"
+      },
+      "gold": {
+        "contract_number": "900/015-Т",
+        "contract_date": "2026-06-14",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 015\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 015",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 652000.37,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 16,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_016.pdf",
+        "docx": "contract_016.docx"
+      },
+      "sha256": {
+        "pdf": "9c09fe8239e62e05d8df63e47e2ee10c341d3134a45410c8d8ab8c195607d585",
+        "docx": "17a910ee680ffd2d17e75916e82a8c3e1acfa96a44a91c4d8999f76958f0bf85"
+      },
+      "gold": {
+        "contract_number": "718/016-Т",
+        "contract_date": "2026-03-02",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 016\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 016",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 259000.49,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_017.pdf",
+        "docx": "contract_017.docx"
+      },
+      "sha256": {
+        "pdf": "80f9de500a2003a1d52308da9770934db1765ac29e73d1fc83fd84e3c30805ba",
+        "docx": "018b6c14fee8632d1343446b4b38642c7e006a0d9fa512fdedd39af7e6110714"
+      },
+      "gold": {
+        "contract_number": "996/017-Т",
+        "contract_date": "2026-09-26",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 017\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 017",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 355000.39,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "split": "holdout",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_018.pdf",
+        "docx": "contract_018.docx"
+      },
+      "sha256": {
+        "pdf": "9edea417ad70ae7f6850c0127f109c46b617d12a0ad38711f8b710860b80d198",
+        "docx": "585a3d03d60c0f5a27df154097e704c5e4cc0afe255398bb99409597f03d0051"
+      },
+      "gold": {
+        "contract_number": "915/018-Т",
+        "contract_date": "2026-04-20",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 018\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 018",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 70000.68,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 19,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_019.pdf",
+        "docx": "contract_019.docx"
+      },
+      "sha256": {
+        "pdf": "94ae27a86d933f05f60d0674ad61500927669ade89ef3d48475cd4fc8508fb21",
+        "docx": "092c7370cc941101eff3bdf75de89f79671b780e8ae94ce1f43b458c65db3db0"
+      },
+      "gold": {
+        "contract_number": "749/019-Т",
+        "contract_date": "2026-09-20",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 019\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 019",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 73000.29,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_020.pdf",
+        "docx": "contract_020.docx"
+      },
+      "sha256": {
+        "pdf": "1cf860c445abc3c75c5f3d5144587b8a2ef419063ff807132c3593311bffcbb8",
+        "docx": "32c6baa9a7013afca496f384bb28d82b9aa00521a7a23f72d8ecdc93c0378677"
+      },
+      "gold": {
+        "contract_number": "124/020-Т",
+        "contract_date": "2026-08-05",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 020\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 020",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 566000.92,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_021.pdf",
+        "docx": "contract_021.docx"
+      },
+      "sha256": {
+        "pdf": "a9e4fefab9cd29d7e901755a6b3e6a12e1374b4f4217e89ec18f69d5e4766c32",
+        "docx": "ffa1d5e3daefbc454afa40700bde80e5078a71523ea6730b83b67cff295038b6"
+      },
+      "gold": {
+        "contract_number": "230/021-Т",
+        "contract_date": "2026-04-10",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 021\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 021",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 603000.25,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 22,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_022.pdf",
+        "docx": "contract_022.docx"
+      },
+      "sha256": {
+        "pdf": "4ba8aa6faca9fa476fccf143681aab9e3b737a783dd0cfca323df059e9cb9223",
+        "docx": "e6c07dc2551ab2d9280972049278c4094756cba5a03f6b99b4732c1affcb97f8"
+      },
+      "gold": {
+        "contract_number": "372/022-Т",
+        "contract_date": "2026-04-15",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 022\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 022",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 712000.99,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_023.pdf",
+        "docx": "contract_023.docx"
+      },
+      "sha256": {
+        "pdf": "a15f3becd78a277203e46b4b755c8e0fe2b2178f6180f5ebfb9681ec05c9bf90",
+        "docx": "dd8ebd4bd9b3d7209bd0ad451aeef615f5168cd4c69b10de8db82ed64299d591"
+      },
+      "gold": {
+        "contract_number": "749/023-Т",
+        "contract_date": "2026-02-28",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 023\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 023",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 619000.69,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_024.pdf",
+        "docx": "contract_024.docx"
+      },
+      "sha256": {
+        "pdf": "558ea2aa547cb8a910a72305875a332c5b5a352ece00d281c5c8594537fffbda",
+        "docx": "5ba6a2e5022e6e86f7e5c07d24410b1ea14be4fcb7d6673649c0cbeb02120265"
+      },
+      "gold": {
+        "contract_number": "428/024-Т",
+        "contract_date": "2026-09-11",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 024\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 024",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 402000.52,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 25,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_025.pdf",
+        "docx": "contract_025.docx"
+      },
+      "sha256": {
+        "pdf": "ee84f57fc162b47d83522e2274e28d6ecc603f6fab0813878f87ae852d3472e7",
+        "docx": "57b33a645fa6445ac5871cbea3a0825f9799c987f13a5399adf95308eb9d5f6c"
+      },
+      "gold": {
+        "contract_number": "825/025-Т",
+        "contract_date": "2026-07-23",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 025\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 025",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 360000.84,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_026.pdf",
+        "docx": "contract_026.docx"
+      },
+      "sha256": {
+        "pdf": "d13f49bd90f6c35789c0929a04044c123701fb09140a5a81c91b0377c22670db",
+        "docx": "43508e5edec837c80f301ffdc839a367ad62d89040d4502d987b6a1782ecc8b0"
+      },
+      "gold": {
+        "contract_number": "219/026-Т",
+        "contract_date": "2026-07-12",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 026\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 026",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 298000.63,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "split": "holdout",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_027.pdf",
+        "docx": "contract_027.docx"
+      },
+      "sha256": {
+        "pdf": "4ea6b282c0ab70f169438cfcffa0b5c41c3a7fe61ebe35e3c0e1a6bc35772ca6",
+        "docx": "19f31867a7ded53261bf8bbce545ef3271d6e48679d9d334f7ae1048a3085d92"
+      },
+      "gold": {
+        "contract_number": "991/027-Т",
+        "contract_date": "2026-09-17",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 027\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 027",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 545000.01,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 28,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_028.pdf",
+        "docx": "contract_028.docx"
+      },
+      "sha256": {
+        "pdf": "9c8f0f4bf1af43d3100b15b83fa111c6d8afe2e77bcca4ced8006be0d7678ab3",
+        "docx": "6fa476dfcf83261631ac0c8c7f589548825be561bd907d4db9ec3cb36225f9a9"
+      },
+      "gold": {
+        "contract_number": "176/028-Т",
+        "contract_date": "2026-02-17",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 028\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 028",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 238000.67,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 29,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_029.pdf",
+        "docx": "contract_029.docx"
+      },
+      "sha256": {
+        "pdf": "696a5283b8e82ff1d8384daec93456d4fb3eadc5ced9747042796809315e80ea",
+        "docx": "f1c86d1106fcdd221b0f04e93c1021c1de28a6b13bc8708940ef077c310aaae6"
+      },
+      "gold": {
+        "contract_number": "578/029-Т",
+        "contract_date": "2026-06-16",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 029\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 029",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 45000.75,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 30,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_030.pdf",
+        "docx": "contract_030.docx"
+      },
+      "sha256": {
+        "pdf": "673cb615991b301078010d770aba5d25391c3c29f496939ecc82688b360d97b9",
+        "docx": "493695350b0158b1384eb3a6b0c4347ad24c5b8f2c6d52483246211b4094faf7"
+      },
+      "gold": {
+        "contract_number": "270/030-Т",
+        "contract_date": "2026-05-02",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 030\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 030",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 707000.97,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 31,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_031.pdf",
+        "docx": "contract_031.docx"
+      },
+      "sha256": {
+        "pdf": "419c9ed99344ce54c67a67845c050a9f097840f5031b6b688acf28afe707dd8b",
+        "docx": "2c44459efeff19e468b0cd3a8c20dd1959bf3435ccc484cd0cae68147daea3bf"
+      },
+      "gold": {
+        "contract_number": "445/031-Т",
+        "contract_date": "2026-03-08",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 031\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 031",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 84000.65,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "split": "development",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_032.pdf",
+        "docx": "contract_032.docx"
+      },
+      "sha256": {
+        "pdf": "a7aeab4f55922b812152756c45ea3f1aedf82b5c5add94257c2074c84ce2913e",
+        "docx": "12f359a0fb47dcb9336c4dc1e656b05c54568b33ac3b0c61a995ce3f76d241e0"
+      },
+      "gold": {
+        "contract_number": "344/032-Т",
+        "contract_date": "2026-04-07",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 032\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 032",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 598000.68,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 33,
+      "split": "development",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_033.pdf",
+        "docx": "contract_033.docx"
+      },
+      "sha256": {
+        "pdf": "f3fb0a603affad8ceb0533dcba7da9667e84bd863c78ac9b9f43fa33d837555d",
+        "docx": "805a35146975b60050194dd4d656218a576b964a83ee3dbf1c2c38127c3ceb1b"
+      },
+      "gold": {
+        "contract_number": "902/033-Т",
+        "contract_date": "2026-08-26",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 033\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 033",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 762000.82,
+          "currency": null
+        }
+      }
+    },
+    {
+      "id": 34,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-1",
+      "files": {
+        "pdf": "contract_034.pdf",
+        "docx": "contract_034.docx"
+      },
+      "sha256": {
+        "pdf": "1b713375304304d5fb9145d10a65729be8175e0f164eb490839090562f433a93",
+        "docx": "cfc294ed0797e86930224144625ea6c4b5908c9e03901175fc5c4022056e9571"
+      },
+      "gold": {
+        "contract_number": "860/034-Т",
+        "contract_date": "2026-05-05",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 034\"",
+            "role": "Заказчик",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 034",
+            "role": "Исполнитель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 680000.7,
+          "currency": "RUB"
+        }
+      }
+    },
+    {
+      "id": 35,
+      "split": "holdout",
+      "kind": "typical",
+      "template_group": "model-2",
+      "files": {
+        "pdf": "contract_035.pdf",
+        "docx": "contract_035.docx"
+      },
+      "sha256": {
+        "pdf": "de750b1c6048907fd81847f5be30b10b0c15e637e80b0c6fb788b65248efe08f",
+        "docx": "6e048480f724dc8e9df8a3557b82c1608798504607c75a66456ad541fabee596"
+      },
+      "gold": {
+        "contract_number": "774/035-Т",
+        "contract_date": "2026-07-12",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 035\"",
+            "role": "Покупатель",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 035",
+            "role": "Поставщик",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 780000.92,
+          "currency": "USD"
+        }
+      }
+    },
+    {
+      "id": 36,
+      "split": "holdout",
+      "kind": "atypical",
+      "template_group": "model-3",
+      "files": {
+        "pdf": "contract_036.pdf",
+        "docx": "contract_036.docx"
+      },
+      "sha256": {
+        "pdf": "8a5d1478b20e511195857c4f0daadd37e24438b3fc3eb12d75f1a28be16f2c14",
+        "docx": "cb25a99fdcf97e6603a51a7eca49bc86c5a5cc785f67a93d986c101690113bdf"
+      },
+      "gold": {
+        "contract_number": "295/036-Т",
+        "contract_date": "2026-01-25",
+        "parties": [
+          {
+            "name": "ООО \"Модельный заказчик 036\"",
+            "role": "Арендатор",
+            "canonical_role": "Заказчик"
+          },
+          {
+            "name": "ИП Модельный Исполнитель 036",
+            "role": "Арендодатель",
+            "canonical_role": "Исполнитель"
+          }
+        ],
+        "total_amount": {
+          "value": 531000.33,
+          "currency": null
+        }
+      }
+    }
+  ]
+}

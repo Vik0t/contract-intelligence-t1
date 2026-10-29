@@ -10,12 +10,19 @@ function Status({ document }) {
 }
 
 function DocumentActions({ document, onOpenFile, onDelete, onAnalyze, onMove, folders }) {
+  const [moving, setMoving] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   return <ActionMenu label={`Действия с документом ${document.filename}`}>
       {document.has_file ? <button type="button" onClick={() => onOpenFile(document)}>Скачать оригинал</button> : null}
-      {document.status !== 'processing' ? <button type="button" onClick={() => {
-        onAnalyze(document);
-      }}>{document.has_metadata ? 'Извлечь заново…' : document.status === 'failed' ? 'Повторить обработку' : 'Извлечь данные'}</button> : null}
-      {folders.length ? <label className="move-document">Переместить в папку<select aria-label={`Папка документа ${document.filename}`} value={document.folder_id ?? ''} onChange={(event) => onMove(document.id, event.target.value ? Number(event.target.value) : null)}><option value="">Без папки</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label> : null}
+      {!['processing', 'uploaded'].includes(document.status) ? <button type="button" disabled={analyzing} aria-busy={analyzing} onClick={async () => {
+        setAnalyzing(true);
+        try { await onAnalyze(document); } finally { setAnalyzing(false); }
+      }}>{analyzing ? 'Запускаем…' : document.has_metadata ? 'Извлечь заново…' : document.status === 'failed' ? 'Повторить обработку' : 'Извлечь данные'}</button> : null}
+      {folders.length ? <label className="move-document">{moving ? 'Перемещаем…' : 'Переместить в папку'}<select disabled={moving} aria-busy={moving} aria-label={`Папка документа ${document.filename}`} value={document.folder_id ?? ''} onChange={async (event) => {
+        const folderId = event.target.value ? Number(event.target.value) : null;
+        setMoving(true);
+        try { await onMove(document.id, folderId); } finally { setMoving(false); }
+      }}><option value="">Без папки</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label> : null}
       <button className="danger-link" type="button" onClick={() => onDelete(document)}>Удалить…</button>
   </ActionMenu>;
 }
@@ -61,7 +68,7 @@ function DocumentCard({ document, token, opening, onOpen, onDragStart, ...action
         <span className="document-card-meta"><span className="document-card-type">{fileExtension(document.filename)}</span><Status document={document} /></span>
         <strong title={document.filename}>{document.filename || 'Без названия'}</strong>
         {document.has_metadata ? <span className="card-facts"><span>{number != null && number !== '' ? `№ ${formatFieldValue('contract_number', fields.contract_number)}` : 'Номер не найден'}</span><span>{amount != null && amount !== '' ? formatFieldValue('total_amount', fields.total_amount) : 'Сумма не найдена'}</span></span> : null}
-        <span className="card-parties">{parties.map(party => party.name).filter(Boolean).join(' / ') || (document.status === 'processing' ? 'Извлекаем реквизиты и условия' : document.status === 'failed' ? 'Откройте документ, чтобы повторить обработку' : 'Реквизиты ещё не извлечены')}</span>
+        <span className="card-parties">{parties.map(party => party.name).filter(Boolean).join(' / ') || (document.has_metadata ? 'Стороны не найдены' : ['processing', 'uploaded'].includes(document.status) ? 'Извлекаем реквизиты и условия' : document.status === 'failed' ? 'Откройте документ, чтобы повторить обработку' : 'Реквизиты ещё не извлечены')}</span>
         <span className="document-card-date">{formatDate(document.created_at)}</span>
       </span>
     </button>
@@ -71,7 +78,7 @@ function DocumentCard({ document, token, opening, onOpen, onDragStart, ...action
 
 function FolderItem({ active, label, count, onClick, onDrop, onDelete }) {
   return <div className={`folder-item-wrap${active ? ' is-active' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
-    <button className="folder-item" type="button" aria-current={active ? 'true' : undefined} onClick={onClick}><span>{label}</span><span className="folder-count">{count}</span></button>
+    <button className="folder-item" type="button" title={label} aria-current={active ? 'true' : undefined} onClick={onClick}><span>{label}</span><span className="folder-count">{count}</span></button>
     {onDelete ? <button className="folder-delete" type="button" onClick={onDelete} aria-label={`Удалить папку ${label}`}>×</button> : null}
   </div>;
 }
@@ -124,12 +131,12 @@ function SortControl({ sortBy, sortOrder, onSort }) {
   </div>;
 }
 
-function LibraryEmptyState({ error, search, filtered, inFolder, onRetry, onReset, onUpload }) {
+function LibraryEmptyState({ error, search, filtered, inFolder, onRetry, onReset, onUpload, uploading }) {
   const title = error ? 'Список документов недоступен' : search ? 'Документы не найдены' : filtered ? 'В этом статусе документов нет' : inFolder ? 'В папке пока нет документов' : 'Загрузите первый договор';
   const message = error || (search ? 'Проверьте название, номер или сторону договора.' : filtered ? 'Выберите другой статус.' : inFolder ? 'Загрузите файлы или переместите их из общего списка.' : 'Реквизиты появятся после обработки.');
   return <div className="empty-state" role={error ? 'alert' : undefined}>
     <strong>{title}</strong><span>{message}</span>
-    {error ? <button className="secondary-button" type="button" onClick={onRetry}>Повторить загрузку</button> : search || filtered ? <button className="secondary-button" type="button" onClick={onReset}>Сбросить поиск и фильтр</button> : <button className="primary-button" type="button" onClick={onUpload}>Выбрать документы</button>}
+    {error ? <button className="secondary-button" type="button" onClick={onRetry}>Повторить загрузку</button> : search || filtered ? <button className="secondary-button" type="button" onClick={onReset}>Сбросить поиск и фильтр</button> : <button className="primary-button" type="button" disabled={uploading} aria-busy={uploading} onClick={onUpload}>{uploading ? 'Загружаем…' : 'Выбрать документы'}</button>}
   </div>;
 }
 
@@ -139,9 +146,11 @@ export default function DocumentLibrary({ token, folders, documents, openingDocu
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const cameraInputRef = useRef(null);
+  const folderTriggerRef = useRef(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [showFolderForm, setShowFolderForm] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
   const [draggedDocumentId, setDraggedDocumentId] = useState(null);
   const [view, setView] = useState(() => localStorage.getItem('contract_library_view') || (window.matchMedia('(max-width: 760px)').matches ? 'cards' : 'table'));
   const visibleDocuments = libraryError ? [] : documents;
@@ -153,7 +162,17 @@ export default function DocumentLibrary({ token, folders, documents, openingDocu
   const dropInFolder = (event, id) => { event.preventDefault(); if (draggedDocumentId) onMoveDocument(draggedDocumentId, id); setDraggedDocumentId(null); };
   const submitFolder = async event => {
     event.preventDefault();
-    if (folderName.trim() && await onCreateFolder(folderName.trim())) { setFolderName(''); setShowFolderForm(false); }
+    if (creatingFolder || !folderName.trim()) return;
+    const form = event.currentTarget;
+    let created = false;
+    setCreatingFolder(true);
+    try {
+      created = await onCreateFolder(folderName.trim());
+      if (created) { setFolderName(''); setShowFolderForm(false); }
+    } finally {
+      setCreatingFolder(false);
+      requestAnimationFrame(() => (created ? listRef.current : form.querySelector('input'))?.focus());
+    }
   };
   return <section className="product-shell" id="main-content" tabIndex={-1} aria-labelledby="library-title">
     <header className="product-heading">
@@ -171,20 +190,21 @@ export default function DocumentLibrary({ token, folders, documents, openingDocu
     {error ? <div className="error" role="alert">{error}<button className="text-button" type="button" onClick={onDismissError}>Закрыть сообщение</button></div> : null}
     <div className="library-layout">
       <aside className="folder-sidebar" aria-label="Папки документов">
-        <div className="sidebar-heading"><h2>Папки</h2><button className="icon-button" type="button" onClick={() => setShowFolderForm(value => !value)} aria-expanded={showFolderForm} aria-label="Создать папку">+</button></div>
+        <div className="sidebar-heading"><h2>Папки</h2><button ref={folderTriggerRef} className="folder-create" type="button" disabled={creatingFolder} onClick={() => setShowFolderForm(value => !value)} aria-expanded={showFolderForm} aria-label="Создать папку"><span aria-hidden="true">+</span>Создать</button></div>
         <div className="folder-list"><FolderItem active={selectedFolderId === null} label="Все документы" count={totalDocuments} onClick={() => onSelectFolder(null)} onDrop={event => dropInFolder(event,null)} />
           {folders.map(folder => <FolderItem key={folder.id} active={selectedFolderId === folder.id} label={folder.name} count={folder.document_count} onClick={() => onSelectFolder(folder.id)} onDrop={event => dropInFolder(event,folder.id)} onDelete={() => onDeleteFolder(folder)} />)}
         </div>
-        {showFolderForm ? <form className="folder-form" onSubmit={submitFolder}><label htmlFor="folder-name">Название папки</label><input id="folder-name" autoFocus value={folderName} onChange={event => setFolderName(event.target.value)} maxLength={120} required /><div><button className="small-button" type="submit">Создать</button><button className="text-button" type="button" onClick={() => setShowFolderForm(false)}>Отмена</button></div></form> : null}
+        {showFolderForm ? <form className="folder-form" onSubmit={submitFolder}><label htmlFor="folder-name">Название папки</label><input id="folder-name" autoFocus value={folderName} onChange={event => setFolderName(event.target.value)} maxLength={120} required disabled={creatingFolder} /><div><button className="small-button" type="submit" disabled={creatingFolder || !folderName.trim()} aria-busy={creatingFolder}>{creatingFolder ? 'Создаём…' : 'Создать'}</button><button className="text-button" type="button" disabled={creatingFolder} onClick={() => { setShowFolderForm(false); folderTriggerRef.current?.focus(); }}>Отмена</button></div></form> : null}
       </aside>
       <section ref={listRef} tabIndex={-1} className="library-content" aria-busy={loading} aria-label="Список договоров">
-        <div className="list-heading"><div><h2>{selectedFolder?.name ?? 'Все документы'}</h2></div><label className="search-box"><span className="visually-hidden">Найти документ</span><input type="search" value={search} onChange={event => onSearch(event.target.value)} placeholder="Название, номер или сторона" /></label></div>
-        <div className="status-filters" role="group" aria-label="Статус документов">{DOCUMENT_FILTERS.map(([value,label]) => <button type="button" aria-pressed={viewStatus === value} className={viewStatus === value ? 'is-active' : ''} key={value} onClick={() => onFilter(value)}>{label}</button>)}</div>
-        <div className="registry-toolbar"><span className="list-count" role="status">{libraryError ? 'Список не загружен' : openingDocumentId ? 'Открываем документ…' : loading ? 'Обновляем…' : resultTotal ? `${(page-1)*pageSize+1}–${Math.min(page*pageSize,resultTotal)} из ${resultTotal}` : '0 документов'}</span>
+        <div className="list-heading"><h2>{selectedFolder?.name ?? 'Все документы'}</h2><span className="list-count" role="status">{libraryError ? 'Список не загружен' : openingDocumentId ? 'Открываем документ…' : loading ? 'Обновляем…' : resultTotal ? `${(page-1)*pageSize+1}–${Math.min(page*pageSize,resultTotal)} из ${resultTotal}` : '0 документов'}</span></div>
+        {totalDocuments > 0 || loading || libraryError || search || viewStatus !== 'all' ? <div className="registry-toolbar">
+          <div className="status-filters" role="group" aria-label="Статус документов">{DOCUMENT_FILTERS.map(([value,label]) => <button type="button" aria-pressed={viewStatus === value} className={viewStatus === value ? 'is-active' : ''} key={value} onClick={() => onFilter(value)}>{label}</button>)}</div>
+          <label className="search-box"><span className="visually-hidden">Найти документ</span><input type="search" value={search} onChange={event => onSearch(event.target.value)} placeholder="Название, номер или сторона" /></label>
           <SortControl sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
           <div className="view-switch" role="group" aria-label="Вид списка"><button type="button" aria-pressed={view === 'table'} onClick={() => changeView('table')}>Реестр</button><button type="button" aria-pressed={view === 'cards'} onClick={() => changeView('cards')}>Карточки</button></div>
-        </div>
-        {loading && !visibleDocuments.length ? <div className="empty-state" role="status">Загружаем документы…</div> : visibleDocuments.length ? view === 'table' ? <div className="registry-scroll" tabIndex={0} aria-label="Таблица договоров, прокрутка по горизонтали"><table className="contract-registry"><caption className="visually-hidden">Реестр договоров</caption><thead><tr>{['Документ', 'Номер и дата', 'Стороны', 'Сумма', 'Статус', ''].map((label,index) => <th scope="col" key={index}>{label || <span className="visually-hidden">Действия</span>}</th>)}</tr></thead><tbody>{visibleDocuments.map(document => <RegistryRow key={document.id} opening={openingDocumentId === document.id} document={document} onOpen={onOpen} onDragStart={setDraggedDocumentId} {...actions} />)}</tbody></table></div> : <div className="documents-grid">{visibleDocuments.map(document => <DocumentCard key={document.id} opening={openingDocumentId === document.id} document={document} token={token} onOpen={onOpen} onDragStart={setDraggedDocumentId} {...actions} />)}</div> : <LibraryEmptyState error={libraryError} search={search} filtered={viewStatus !== 'all'} inFolder={Boolean(selectedFolder)} onRetry={onRetry} onReset={() => { onSearch(''); onFilter('all'); }} onUpload={() => inputRef.current?.click()} />}
+        </div> : null}
+        {loading && !visibleDocuments.length ? <div className="empty-state" role="status">Загружаем документы…</div> : visibleDocuments.length ? view === 'table' ? <div className="registry-scroll" tabIndex={0} aria-label="Таблица договоров, прокрутка по горизонтали"><table className="contract-registry"><caption className="visually-hidden">Реестр договоров</caption><thead><tr>{['Документ', 'Номер и дата', 'Стороны', 'Сумма', 'Статус', ''].map((label,index) => <th scope="col" key={index}>{label || <span className="visually-hidden">Действия</span>}</th>)}</tr></thead><tbody>{visibleDocuments.map(document => <RegistryRow key={document.id} opening={openingDocumentId === document.id} document={document} onOpen={onOpen} onDragStart={setDraggedDocumentId} {...actions} />)}</tbody></table></div> : <div className="documents-grid">{visibleDocuments.map(document => <DocumentCard key={document.id} opening={openingDocumentId === document.id} document={document} token={token} onOpen={onOpen} onDragStart={setDraggedDocumentId} {...actions} />)}</div> : <LibraryEmptyState uploading={uploading} error={libraryError} search={search} filtered={viewStatus !== 'all'} inFolder={Boolean(selectedFolder)} onRetry={onRetry} onReset={() => { onSearch(''); onFilter('all'); }} onUpload={() => inputRef.current?.click()} />}
         {!libraryError && resultTotal > pageSize ? <nav className="pagination" aria-label="Страницы документов"><button type="button" className="secondary-button" disabled={page === 1 || loading} onClick={() => changePage(page-1)}>← Назад</button><span>Страница {page} из {Math.ceil(resultTotal/pageSize)}</span><button type="button" className="secondary-button" disabled={page*pageSize >= resultTotal || loading} onClick={() => changePage(page+1)}>Далее →</button></nav> : null}
       </section>
     </div>

@@ -7,14 +7,6 @@ export function orderedEntries(fields) {
   return keys.filter((key) => Object.hasOwn(fields ?? {}, key)).map((key) => [key, fields[key]]);
 }
 
-function partyEvidence(party) {
-  return party?.name_evidence || party?.inn_evidence || null;
-}
-
-function partyPage(party) {
-  return party?.name_page_number ?? party?.inn_page_number ?? null;
-}
-
 function SourceButton({ evidence, page, paragraph, onSelect, showPages = true, manual = false, label = 'В документе' }) {
   if (!evidence) return <span className="source-missing">{manual ? 'Изменено оператором' : 'Источник не найден'}</span>;
   return (
@@ -29,10 +21,10 @@ function PartiesValue({ parties, onSelectSource, showPages }) {
   return (
     <div className="party-list">
       {parties.map((party, index) => (
-        <div className="party-row" key={`${party.inn ?? party.name ?? index}`}>
+        <div className="party-row" key={index}>
           <div><strong>{party.name || 'Название не найдено'}</strong><span>{party.role || 'Роль не определена'}</span>{party.reason ? <span className="missing-value">{party.reason}</span> : null}</div>
           <span>{party.inn ? `ИНН ${party.inn}` : 'ИНН не найден'}</span>
-          <div className="party-sources"><SourceButton showPages={showPages} label="Название в документе" evidence={partyEvidence(party)} page={partyPage(party)} paragraph={party.paragraph_number} onSelect={onSelectSource} />
+          <div className="party-sources"><SourceButton showPages={showPages} manual={party.method === 'manual'} label="Название в документе" evidence={party.name_evidence} page={party.name_page_number} paragraph={party.paragraph_number} onSelect={onSelectSource} />
           {party.inn_evidence ? <SourceButton showPages={showPages} label="ИНН в документе" evidence={party.inn_evidence} page={party.inn_page_number} onSelect={onSelectSource} /> : null}</div>
         </div>
       ))}
@@ -45,11 +37,12 @@ export function FieldRow({ fieldKey, field, active, reviewed, onSelectSource, on
   const page = getFieldPage(fieldKey, field);
   const needsReview = fieldNeedsReview(fieldKey, field);
   const value = getFieldValue(fieldKey, field);
+  const hasValue = value !== null && value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0);
   return (
     <section id={`field-${fieldKey}`} className={`field-row${active ? ' is-active' : ''}${needsReview && !reviewed ? ' needs-review' : ''}`}>
       <div className="field-row-heading">
         <span>{fieldLabels[fieldKey] ?? fieldKey.replaceAll('_', ' ')}</span>
-        {needsReview && !reviewed ? <strong className="review-flag">{field?.status === 'not_found' || value == null || (Array.isArray(value) && !value.length) ? 'Не найдено' : 'Проверить'}</strong> : null}
+        {needsReview && !reviewed && hasValue ? <strong className="review-flag">Проверить</strong> : null}
       </div>
       {field?.reason && !(field.method === 'manual' && field.reason === 'Значение изменено вручную') ? <p className="field-review-reason">{field.reason}</p> : null}
       {field?.candidates?.map((candidate, index) => <div className="field-source" key={index}><span>{candidate.value}{candidate.currency ? ` ${candidate.currency}` : ''}</span><SourceButton showPages={showPages} evidence={candidate.evidence} page={candidate.page_number} paragraph={candidate.paragraph_number} onSelect={(source) => onSelectSource({ ...source, fieldKey })} /><blockquote>{candidate.evidence}</blockquote></div>)}
@@ -57,7 +50,7 @@ export function FieldRow({ fieldKey, field, active, reviewed, onSelectSource, on
         {fieldKey === 'parties' ? <PartiesValue showPages={showPages} parties={value} onSelectSource={(source) => onSelectSource({ ...source, fieldKey })} /> : <span className={value === null || value === undefined || value === '' ? 'missing-value' : ''}>{formatFieldValue(fieldKey, field)}</span>}
       </div>
       <div className="field-tools">
-      {fieldKey !== 'parties' ? (
+      {fieldKey !== 'parties' && (hasValue || field?.method === 'manual') ? (
         <div className="field-source">
           <SourceButton showPages={showPages} manual={field?.method === 'manual'} evidence={evidence} page={page} paragraph={field?.paragraph_number} onSelect={(source) => onSelectSource({ ...source, fieldKey })} />
         </div>
@@ -114,7 +107,8 @@ export function MetadataEditor({ fields, onChange, onlyKey }) {
           return (
             <fieldset className="editor-fieldset" key={key}>
               <legend>{fieldLabels[key]}</legend>
-              {(parties.length ? parties : [{ name: '', role: '', inn: '' }]).map((party, index) => (
+              {!parties.length ? <p className="muted">Стороны не добавлены.</p> : null}
+              {parties.map((party, index) => (
                 <div className="party-editor-row" key={index}>
                   <label>Сторона<input value={party.name ?? ''} onChange={(event) => updateParty(index, 'name', event.target.value)} /></label>
                   <label>Роль<input value={party.role ?? ''} onChange={(event) => updateParty(index, 'role', event.target.value)} /></label>
@@ -169,7 +163,7 @@ export function MetadataEditor({ fields, onChange, onlyKey }) {
           <label className="editor-field" key={key} htmlFor={`metadata-${key}`}>
             {fieldLabels[key] ?? key}
             {simple ? (
-              <input id={`metadata-${key}`} type={key === 'contract_date' || key === 'term' ? 'date' : 'text'} value={value ?? ''} onChange={(event) => onChange(updateFieldValue(fields, key, event.target.value))} />
+              <input id={`metadata-${key}`} type={key === 'contract_date' ? 'date' : 'text'} placeholder={key === 'term' ? 'Дата или условие окончания договора' : undefined} value={value ?? ''} onChange={(event) => onChange(updateFieldValue(fields, key, event.target.value))} />
             ) : (
               <textarea id={`metadata-${key}`} rows={5} value={JSON.stringify(value, null, 2)} readOnly aria-describedby={`metadata-${key}-hint`} />
             )}

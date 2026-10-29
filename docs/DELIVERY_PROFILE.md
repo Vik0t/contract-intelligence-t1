@@ -1,6 +1,6 @@
 # Профиль поставки по ПМИ
 
-Закреплён 28 октября 2026 года: **`pmi-rules-v1`**. Определение, проверяемое сервером и оценщиком, находится в [backend/delivery_profile.py](../backend/delivery_profile.py). Изменение обязательных настроек требует новой версии профиля. Коммит, тег и digest образов окончательного релиза фиксируются следующим этапом плана.
+Закреплён 28 октября 2026 года: **`pmi-rules-v1`**. Определение, проверяемое сервером и оценщиком, находится в [backend/delivery_profile.py](../backend/delivery_profile.py). Изменение обязательных настроек требует новой версии профиля. Исходный релиз — **`v1.0.0`**; состав, воспроизведение и границы проверки описаны в [паспорте релиза](RELEASE_v1.0.0.md). ID локально проверенных образов фиксируется отдельно от digest опубликованного образа.
 
 | Настройка | Значение |
 |---|---|
@@ -37,9 +37,9 @@ curl --fail http://127.0.0.1:8080/api/runtime/profile
 
 ```bash
 uv run python -m scripts.evaluate_acceptance \
-  --dataset tmp/acceptance-2026-10-27 --split holdout \
+  --dataset evals/pmi-control-v1 --split holdout \
   --profile pmi-rules-v1 --backend rules --transport http \
-  --base-url http://127.0.0.1:8080/api \
+  --base-url http://127.0.0.1:8080/api --review-policy issued \
   --output tmp/pmi-http-new.json
 ```
 

@@ -226,12 +226,14 @@ export default function DocumentWorkspace({ document, token, error, onClearError
   const [contentAttempt, setContentAttempt] = useState(0);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [editError, setEditError] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const [draftFields, setDraftFields] = useState(() => cloneFields(document.metadata?.fields));
   const [notice, setNotice] = useState('');
   const noticeTimeoutRef = useRef(null);
   const reviewContentRef = useRef(null);
+  const lastEditedFieldRef = useRef(null);
   useLayoutEffect(() => {
     reviewContentRef.current?.scrollTo({ top: 0, behavior: 'instant' });
   }, [activeTab]);
@@ -257,11 +259,23 @@ export default function DocumentWorkspace({ document, token, error, onClearError
 
   useEffect(() => {
     setEditing(false);
+    const frame = requestAnimationFrame(() => window.document.querySelector('.workspace-title h1')?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
   }, [document.id]);
 
   useEffect(() => {
-    if (!editing) return undefined;
-    const frame = requestAnimationFrame(() => window.document.querySelector('.inline-editor input, .inline-editor select')?.focus());
+    if (editing) lastEditedFieldRef.current = editing;
+    const previous = lastEditedFieldRef.current;
+    if (!editing) lastEditedFieldRef.current = null;
+    if (!editing && !previous) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const target = editing
+        ? window.document.querySelector('.inline-editor input, .inline-editor select')
+        : previous === 'all'
+          ? window.document.querySelector('.edit-field-button')
+          : window.document.getElementById(`field-${previous}`)?.querySelector('.edit-field-button');
+      target?.focus();
+    });
     return () => cancelAnimationFrame(frame);
   }, [editing]);
 
@@ -303,7 +317,7 @@ export default function DocumentWorkspace({ document, token, error, onClearError
   const copyValue = async (value, label) => {
     try {
       await navigator.clipboard.writeText(String(value));
-      showNotice(`${label || 'Значение'} скопировано`);
+      showNotice(label ? `Скопировано: ${label}` : 'Значение скопировано');
     } catch {
       showNotice('Не удалось скопировать значение');
     }
@@ -347,6 +361,7 @@ export default function DocumentWorkspace({ document, token, error, onClearError
     try {
       await onReview(document, confirmed);
       showNotice(confirmed ? 'Проверка подтверждена и сохранена' : 'Документ возвращён на проверку');
+      requestAnimationFrame(() => reviewContentRef.current?.parentElement?.querySelector('.review-footer button')?.focus());
     } catch {
       // The parent displays the actionable request error.
     } finally {
@@ -371,6 +386,7 @@ export default function DocumentWorkspace({ document, token, error, onClearError
   const hasMetadata = document.has_metadata && document.metadata?.fields;
   const canStartAnalysis = document.status === 'ready' || document.status === 'failed';
   const isReviewed = document.review_status === 'reviewed';
+  const visibleFieldKeys = new Set(orderedEntries(fields).map(([key]) => key));
   const fieldGroups = [
     ['Реквизиты', ['contract_number', 'contract_date', 'contract_type', 'place']],
     ['Стороны', ['parties']],
@@ -384,19 +400,21 @@ export default function DocumentWorkspace({ document, token, error, onClearError
     } catch { showNotice('Не удалось открыть следующий документ. Попробуйте ещё раз.'); }
     finally { setNextLoading(false); }
   };
-  const repeatAnalysis = () => {
-    onAnalyze(document);
+  const repeatAnalysis = async () => {
+    if (startingAnalysis) return;
+    setStartingAnalysis(true);
+    try { await onAnalyze(document); } finally { setStartingAnalysis(false); }
   };
   return (
     <section className="workspace-shell" id="main-content" tabIndex={-1}>
       <header className="workspace-header">
         <div className="workspace-navigation"><button className="back-button" type="button" onClick={onBack}><span aria-hidden="true">←</span> Назад к списку</button><span className="workspace-file-type">{document.filename?.split('.').pop()?.toUpperCase()}</span><span className="workspace-meta">Добавлен {formatDate(document.created_at)}</span></div>
-        <div className="workspace-titlebar"><div className="workspace-title"><h1 title={document.filename || 'Документ'}>{document.filename || 'Документ'}</h1></div>
+        <div className="workspace-titlebar"><div className="workspace-title"><h1 tabIndex={-1} title={document.filename || 'Документ'}>{document.filename || 'Документ'}</h1></div>
           <div className="workspace-actions">
             {hasMetadata && !editing ? <button className="secondary-button compact-button" type="button" aria-label="Скачать JSON" onClick={exportJson}>Скачать JSON <span aria-hidden="true">↓</span></button> : null}
             <ActionMenu label="Другие действия с договором">
               {document.has_file ? <button type="button" onClick={() => onOpenFile(document)}>Скачать оригинал</button> : null}
-              {hasMetadata && !editing ? <><button type="button" onClick={copyAll}>Копировать все данные</button><button type="button" disabled={isProcessing} onClick={() => startEditing('all')}>Редактировать все поля</button><button type="button" disabled={isProcessing} onClick={repeatAnalysis}>Извлечь заново…</button>{isReviewed ? <button type="button" disabled={reviewing || isProcessing} onClick={() => updateReview(false)}>Вернуть на проверку</button> : null}</> : null}
+              {hasMetadata && !editing ? <><button type="button" onClick={copyAll}>Копировать все данные</button><button type="button" disabled={isProcessing || startingAnalysis} onClick={() => startEditing('all')}>Редактировать все поля</button><button type="button" disabled={isProcessing || startingAnalysis} onClick={repeatAnalysis}>Извлечь заново…</button>{isReviewed ? <button type="button" disabled={reviewing || isProcessing || startingAnalysis} onClick={() => updateReview(false)}>Вернуть на проверку</button> : null}</> : null}
             </ActionMenu>
           </div>
         </div>
@@ -407,10 +425,11 @@ export default function DocumentWorkspace({ document, token, error, onClearError
         <strong>{isProcessing ? 'Извлекаем данные заново…' : isReviewed ? 'Реквизиты проверены' : 'Реквизиты на проверке'}</strong>
         {isReviewed && document.reviewed_at && !isProcessing ? <time dateTime={document.reviewed_at}>{new Date(document.reviewed_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })}</time> : reviewCount && !isProcessing ? <small>Требуют внимания: {reviewCount}</small> : null}
       </div> : null}
+      {hasMetadata && document.status === 'failed' ? <div className="error" role="alert"><strong>Не удалось извлечь данные заново. Показан сохранённый результат.</strong><span>{document.processing_error || 'Повторите обработку.'}</span><button className="text-button" type="button" disabled={startingAnalysis} onClick={repeatAnalysis}>{startingAnalysis ? 'Запускаем…' : 'Повторить обработку'}</button></div> : null}
       {!hasMetadata ? <div className={`processing-state is-${document.status}`} role="status"><div className="processing-line" />
         <strong>{isProcessing ? 'Извлекаем данные из договора…' : document.status === 'failed' ? 'Не удалось обработать документ' : 'Документ загружен'}</strong>
         <span>{document.processing_error || (isProcessing ? 'Можно вернуться к списку. Обработка продолжится, результат сохранится.' : 'Запустите обработку, чтобы получить реквизиты и условия договора.')}</span>
-        <div className="processing-actions">{canStartAnalysis ? <button className="primary-button" type="button" onClick={() => onAnalyze(document)}>{document.status === 'failed' ? 'Повторить обработку' : 'Извлечь данные'}</button> : null}<button className="secondary-button" type="button" onClick={onBack}>К списку документов</button></div>
+        <div className="processing-actions">{canStartAnalysis ? <button className="primary-button" type="button" disabled={startingAnalysis} aria-busy={startingAnalysis} onClick={repeatAnalysis}>{startingAnalysis ? 'Запускаем…' : document.status === 'failed' ? 'Повторить обработку' : 'Извлечь данные'}</button> : null}<button className="secondary-button" type="button" onClick={onBack}>К списку документов</button></div>
       </div> : <>
         <nav className="mobile-pane-switch" aria-label="Разделы договора">
           <button type="button" aria-pressed={mobilePane === 'review' && activeTab === 'fields'} onClick={() => { setMobilePane('review'); setActiveTab('fields'); }}>Реквизиты{reviewCount ? <span>{reviewCount}</span> : null}</button>
@@ -427,15 +446,15 @@ export default function DocumentWorkspace({ document, token, error, onClearError
               {activeTab === 'fields' && !editing ? <div className="field-filter" role="group" aria-label="Показать поля"><button type="button" aria-pressed={fieldFilter === 'all'} onClick={() => setFieldFilter('all')}>Все поля</button><button type="button" aria-pressed={fieldFilter === 'attention'} onClick={() => setFieldFilter('attention')}>Проверить{reviewCount ? ` · ${reviewCount}` : ''}</button></div> : null}
               {editing === 'all' ? <form className="inline-editor" onSubmit={event => { event.preventDefault(); void saveMetadata(); }}><h2>Редактирование реквизитов</h2><MetadataEditor fields={draftFields} onChange={updateDraft} />{editError ? <p className="error" role="alert">{editError}</p> : null}<div className="inline-editor-actions"><button className="primary-button" disabled={saving || !dirty}>Сохранить изменения</button><button className="text-button" type="button" disabled={saving} onClick={cancelEditing}>Отмена</button></div></form> : null}
               {editing !== 'all' && activeTab === 'fields' ? fieldGroups.map(([label,keys]) => {
-                const entries = keys.filter(key => Object.hasOwn(fields,key) && (fieldFilter !== 'attention' || (!isReviewed && fieldNeedsReview(key,fields[key])) || editing === key));
-                return entries.length ? <div className="field-group" key={label}><h2>{label}</h2>{entries.map(key => editing === key ? <form className="inline-editor" key={key} onSubmit={event => { event.preventDefault(); void saveMetadata(); }}><MetadataEditor fields={draftFields} onlyKey={key} onChange={updateDraft} />{editError ? <p className="error" role="alert">{editError}</p> : null}<div className="inline-editor-actions"><button className="primary-button compact-button" disabled={saving || !dirty}>{saving ? 'Сохраняем…' : 'Сохранить'}</button><button className="text-button" disabled={saving} type="button" onClick={cancelEditing}>Отмена</button></div></form> : <FieldRow showPages={content?.source_format !== 'docx'} key={key} fieldKey={key} field={fields[key]} active={selectedSource?.fieldKey === key} reviewed={isReviewed} onSelectSource={selectSource} onCopy={copyValue} onEdit={startEditing} disabled={isProcessing || Boolean(editing)} />)}</div> : null;
+                const entries = keys.filter(key => visibleFieldKeys.has(key) && (fieldFilter !== 'attention' || (!isReviewed && fieldNeedsReview(key,fields[key])) || editing === key));
+                return entries.length ? <div className="field-group" key={label}><h2>{label}</h2>{entries.map(key => editing === key ? <form className="inline-editor" key={key} onSubmit={event => { event.preventDefault(); void saveMetadata(); }}><MetadataEditor fields={draftFields} onlyKey={key} onChange={updateDraft} />{editError ? <p className="error" role="alert">{editError}</p> : null}<div className="inline-editor-actions"><button className="primary-button compact-button" disabled={saving || !dirty}>{saving ? 'Сохраняем…' : 'Сохранить'}</button><button className="text-button" disabled={saving} type="button" onClick={cancelEditing}>Отмена</button></div></form> : <FieldRow showPages={content?.source_format !== 'docx'} key={key} fieldKey={key} field={fields[key]} active={selectedSource?.fieldKey === key} reviewed={isReviewed} onSelectSource={selectSource} onCopy={copyValue} onEdit={startEditing} disabled={isProcessing || startingAnalysis || Boolean(editing)} />)}</div> : null;
               }) : null}
               {activeTab === 'fields' && fieldFilter === 'attention' && !reviewCount && !editing ? <div className="empty-panel"><strong>{isReviewed ? 'Проверка завершена' : 'Сомнительных полей не отмечено'}</strong><span>{isReviewed ? 'Результат сохранён. Можно перейти к следующему договору.' : 'Перед подтверждением просмотрите все поля и оригинал.'}</span><button type="button" className="text-button" onClick={() => setFieldFilter('all')}>Показать все поля</button></div> : null}
               {!editing && activeTab === 'summary' ? <SummaryPanel fields={fields} summary={document.metadata?.summary} onRefresh={refreshInsights} refreshing={refreshingInsights} insightError={insightError} /> : null}
               {!editing && activeTab === 'risks' ? <RiskReviewPanel showPages={content?.source_format !== 'docx'} key={document.id} fields={fields} review={document.metadata?.risk_review} legacyRisks={document.metadata?.risks} onSelectSource={selectSource} onOpenFields={() => setActiveTab('fields')} onRun={profile => onReviewRisks(document,profile)} /> : null}
             </div>
             <footer className="review-footer">
-              {editing ? <span className="save-status" role="status">{dirty ? 'Есть несохранённые изменения' : 'Измените значение и сохраните'}</span> : isReviewed ? <button className="primary-button" type="button" disabled={nextLoading || isProcessing} onClick={queueEmpty ? onBack : nextDocument}>{nextLoading ? 'Открываем…' : queueEmpty ? 'К списку договоров' : 'Следующий на проверку →'}</button> : activeTab === 'fields' ? <button className="primary-button" type="button" disabled={reviewing || isProcessing} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить реквизиты'}</button> : <button className="secondary-button" type="button" onClick={() => setActiveTab('fields')}>Проверить реквизиты <span aria-hidden="true">→</span></button>}
+              {editing ? <span className="save-status" role="status">{dirty ? 'Есть несохранённые изменения' : 'Измените значение и сохраните'}</span> : isReviewed ? <button className="primary-button" type="button" disabled={reviewing || nextLoading || isProcessing || startingAnalysis} onClick={queueEmpty ? onBack : nextDocument}>{nextLoading ? 'Открываем…' : queueEmpty ? 'К списку договоров' : 'Следующий на проверку →'}</button> : activeTab === 'fields' ? <button className="primary-button" type="button" disabled={reviewing || isProcessing || startingAnalysis} onClick={() => updateReview(true)}>{reviewing ? 'Сохраняем…' : 'Подтвердить реквизиты'}</button> : <button className="secondary-button" type="button" onClick={() => setActiveTab('fields')}>Проверить реквизиты <span aria-hidden="true">→</span></button>}
             </footer>
           </aside>
           <section className="document-panel" aria-label="Оригинал договора">

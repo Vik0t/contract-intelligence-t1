@@ -41,7 +41,11 @@ export function updateFieldValue(fields, key, value) {
   const next = cloneFields(fields);
   const current = next[key];
   if (isStructuredField(current)) {
-    if (key === 'vat' || (!Object.hasOwn(current, 'value') && Object.hasOwn(current, 'raw_value'))) {
+    if (key === 'term') {
+      current.value = null;
+      current.raw_value = value;
+      current.semantic_type = null;
+    } else if (key === 'vat' || (!Object.hasOwn(current, 'value') && Object.hasOwn(current, 'raw_value'))) {
       current.raw_value = value;
     } else {
       current.value = value;
@@ -78,6 +82,15 @@ export function fieldsForSave(fields) {
   if (isStructuredField(result.vat)) {
     result.vat.rate = number(result.vat.rate, 'Ставка НДС');
     if (result.vat.rate !== null && (result.vat.rate < 0 || result.vat.rate > 100)) throw new Error('Ставка НДС должна быть от 0 до 100%.');
+  }
+  if (isStructuredField(result.term) && result.term.method === 'manual') {
+    const raw = result.term.raw_value?.trim() ?? '';
+    const russian = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    const iso = russian ? `${russian[3]}-${russian[2]}-${russian[1]}` : raw;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+      if (!calendarDate(iso)) throw new Error('Срок действия: проверьте дату окончания договора.');
+      result.term.value = iso;
+    }
   }
   return result;
 }
@@ -122,14 +135,13 @@ export function displayText(value, emptyLabel = 'Не найдено') {
 export function formatFieldValue(key, field) {
   const value = getFieldValue(key, field);
   if (key === 'contract_date' || key === 'term') {
-    const date = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
-      ? new Date(`${value}T00:00:00`)
-      : null;
-    if (date && !Number.isNaN(date.getTime())) {
+    const date = calendarDate(value);
+    if (date) {
       return new Intl.DateTimeFormat('ru-RU').format(date);
     }
   }
   if (key === 'total_amount' && isStructuredField(field)) {
+    if (value === null || value === undefined || value === '') return 'Не найдено';
     const amount = typeof field.value === 'number'
       ? new Intl.NumberFormat('ru-RU').format(field.value)
       : displayText(value);
@@ -137,6 +149,12 @@ export function formatFieldValue(key, field) {
     return `${amount}${currency ? ` ${currency}` : ''}`;
   }
   return displayText(value);
+}
+
+function calendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00`);
+  return !Number.isNaN(date.getTime()) && date.getFullYear() === Number(value.slice(0, 4)) && date.getMonth() + 1 === Number(value.slice(5, 7)) && date.getDate() === Number(value.slice(8, 10)) ? date : null;
 }
 
 export function partyNeedsReview(party) {
@@ -182,7 +200,8 @@ export function fileExtension(filename) {
 
 export function fieldsToPlainObject(fields) {
   const result = {};
-  for (const key of FIELD_ORDER) {
+  const keys = [...FIELD_ORDER, ...Object.keys(fields ?? {}).filter(key => !FIELD_ORDER.includes(key) && !key.startsWith('_'))];
+  for (const key of keys) {
     if (Object.hasOwn(fields ?? {}, key)) result[fieldLabels[key] ?? key] = getFieldValue(key, fields[key]);
     if (key === 'total_amount' && isStructuredField(fields?.[key])) result['Валюта'] = fields[key].currency ?? null;
   }

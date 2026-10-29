@@ -31,5 +31,6 @@ export function useConfirmation() {
     resolve?.(value);
   }, []);
   useEffect(() => () => resolver.current?.(false), []);
-  return [confirm, options ? <ConfirmationDialog key="confirmation" options={options} onResolve={finish} /> : null];
+  const cancel = useCallback(() => finish(false), [finish]);
+  return [confirm, options ? <ConfirmationDialog key="confirmation" options={options} onResolve={finish} /> : null, cancel];
 }
