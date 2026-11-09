@@ -1,5 +1,6 @@
 **
 !Dockerfile
+!Dockerfile.portable
 !.dockerignore
 !backend/
 !backend/**

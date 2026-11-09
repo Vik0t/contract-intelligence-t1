@@ -12,6 +12,7 @@ from src.ocr import OCRBackend, TesseractOCRBackend
 from src.parsing import document_ir_to_text, parse_document
 
 from src.extraction.schema import CONTRACT_TEMPLATE, INSTRUCTIONS
+from src.extraction.json_output import parse_json_output
 from src.extraction.model_loading import (
     load_model,
     use_mlx,
@@ -32,26 +33,6 @@ def build_messages(text: str) -> list[dict[str, Any]]:
             "content": [{"type": "text", "text": text}],
         }
     ]
-
-
-def parse_json_output(text: str) -> Any:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("Модель не вернула JSON")
-        return json.loads(cleaned[start : end + 1])
 
 
 def extract_text_from_document(

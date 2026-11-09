@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from src.document_ir import DocumentIR
-from src.extraction.pipeline import parse_json_output
+from src.extraction.json_output import parse_json_output
 from src.extraction.postprocess import postprocess_extraction, validate_extraction
 from src.extraction.schema import CONTRACT_TEMPLATE, INSTRUCTIONS
 from src.extraction.summary import generate_chat

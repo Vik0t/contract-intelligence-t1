@@ -9,13 +9,17 @@ from backend.config import Settings
 from src.document_ir import DocumentIR
 from src.hf_space_extraction import HFSpaceNuExtractBackend
 from src.hf_chat_extraction import extract_fields_with_hf_chat
-from src.local_extraction import extract_contract_key_data, reset_extraction_stats
-from src.extraction.model_loading import unload_model
 from src.extraction.runtime import MODEL_LOCK, external_inference_allowed, keep_models_loaded
 from src.extraction.summary import unload_local_summary_model
 from src.extraction.chat_pipeline import extract_fields_with_api
 
 logger = logging.getLogger(__name__)
+
+
+def extract_contract_key_data(**kwargs):
+    # API/rules deployments do not need Torch, Transformers or model weights.
+    from src.local_extraction import extract_contract_key_data as extract_local
+    return extract_local(**kwargs)
 
 
 class ExtractionService:
@@ -50,6 +54,7 @@ class ExtractionService:
             from src.extraction.rules import extract_with_rules
             return extract_with_rules(text, document_ir)
         if self.settings.extraction_backend == "local":
+            from src.extraction.model_loading import reset_extraction_stats, unload_model
             with MODEL_LOCK:
                 if not keep_models_loaded():
                     unload_local_summary_model()

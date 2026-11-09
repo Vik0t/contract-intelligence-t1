@@ -8,7 +8,7 @@ from typing import Any
 
 from src.document_ir import DocumentIR
 from src.extraction.context import document_chunks
-from src.extraction.pipeline import parse_json_output
+from src.extraction.json_output import parse_json_output
 from src.extraction.postprocess import postprocess_extraction, validate_extraction
 from src.extraction.schema import INSTRUCTIONS, CONTRACT_TYPE_LABELS, TERM_SEMANTIC_TYPES
 from src.extraction.summary import generate_chat

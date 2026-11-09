@@ -128,6 +128,19 @@ ML_ALLOW_EXTERNAL=false
 
 ### Запуск
 
+Для быстрого развёртывания на обычном компьютере без GPU используйте переносимый
+образ (macOS / Windows / Linux, amd64 / arm64):
+
+```bash
+cp .env.docker.example .env.docker
+# Задайте POSTGRES_PASSWORD в .env.docker, например через openssl rand -hex 24.
+docker compose --env-file .env.docker -f compose.portable.yaml up -d --build --wait
+```
+
+Интерфейс: `http://localhost:8080`. По умолчанию работает извлечение по правилам;
+полный анализ подключается через настроенный API. [Инструкция Docker](docs/DOCKER.md)
+включает настройки, перенос готовых образов без сборки и сохранение данных.
+
 Профиль поставки четырёх атрибутов [pmi-rules-v1](docs/DELIVERY_PROFILE.md): CPU, нативный DOCX, текстовый PDF, PostgreSQL, автоматическое извлечение, OCR и внешние вызовы выключены.
 
 ```bash

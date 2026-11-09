@@ -18,13 +18,9 @@ from gradio_client import Client
 
 from src.document_ir import DocumentIR
 from src.extraction.validation import validate_model_result
-from src.local_extraction import (
-    CONTRACT_TEMPLATE,
-    INSTRUCTIONS,
-    parse_json_output,
-    postprocess_extraction,
-    validate_extraction,
-)
+from src.extraction.schema import CONTRACT_TEMPLATE, INSTRUCTIONS
+from src.extraction.json_output import parse_json_output
+from src.extraction.postprocess import postprocess_extraction, validate_extraction
 
 DEFAULT_SPACE_ID = "numind/NuExtract3"
 DEFAULT_API_NAME = "/on_extract_click"

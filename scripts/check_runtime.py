@@ -33,13 +33,13 @@ def verify_weights(folder: Path) -> None:
 
 
 def check_runtime(*, require_gpu: bool = True, require_models: bool = True) -> dict:
-    import torch
-    from huggingface_hub import snapshot_download
-
-    if require_gpu and not torch.cuda.is_available():
-        raise RuntimeError("CUDA GPU недоступна. Проверьте NVIDIA Container Toolkit и docker --gpus all")
+    torch = None
+    if require_gpu:
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA GPU недоступна. Проверьте NVIDIA Container Toolkit и docker --gpus all")
     gpu = None
-    if torch.cuda.is_available():
+    if torch is not None and torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
         arch = f"sm_{capability[0]}{capability[1]}"
         if require_gpu and arch not in torch.cuda.get_arch_list():
@@ -56,11 +56,13 @@ def check_runtime(*, require_gpu: bool = True, require_models: bool = True) -> d
         raise RuntimeError("Для OCR нужны языки Tesseract rus и eng")
     models = []
     if require_models:
+        from huggingface_hub import snapshot_download
         for model, revision in model_specs():
             folder = Path(snapshot_download(model, revision=revision, local_files_only=True, allow_patterns=MODEL_FILES))
             verify_weights(folder)
             models.append({"model": model, "revision": folder.name})
-    return {"torch": torch.__version__, "cuda": torch.version.cuda, "gpu": gpu, "models": models, "ocr": "rus+eng", "docx": "LibreOffice"}
+    return {"torch": torch.__version__ if torch else None, "cuda": torch.version.cuda if torch else None,
+            "gpu": gpu, "models": models, "ocr": "rus+eng", "docx": "LibreOffice"}
 
 
 def main() -> None:

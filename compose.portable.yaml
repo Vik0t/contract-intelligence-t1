@@ -1,0 +1,55 @@
+name: contract-intelligence-portable
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: contracts
+      POSTGRES_USER: contracts
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+    volumes: [database:/var/lib/postgresql/data]
+    networks: [private]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U contracts -d contracts"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    image: ${BACKEND_IMAGE:-contract-intelligence-backend:portable}
+    build: {context: ., dockerfile: Dockerfile.portable}
+    env_file: ${DOCKER_ENV_FILE:-.env.docker}
+    environment:
+      DATABASE_URL: postgresql://contracts:${POSTGRES_PASSWORD}@db:5432/contracts
+      DOCUMENT_STORAGE_DIR: /data/uploads
+      API_ROOT_PATH: /api
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes: [documents:/data]
+    networks: [private, edge]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-contract-intelligence-frontend:portable}
+    build: {context: ., dockerfile: frontend/Dockerfile}
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:8080"]
+    networks: [private, edge]
+    depends_on:
+      backend: {condition: service_healthy}
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/api/health/ready]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  database:
+  documents:
+networks:
+  private: {internal: true}
+  edge:

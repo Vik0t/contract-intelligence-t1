@@ -86,7 +86,7 @@ def test_extraction_service_routes_to_huggingface_space(monkeypatch) -> None:
 
 def test_extraction_service_falls_back_when_space_times_out(monkeypatch) -> None:
     service = ExtractionService(
-        Settings(_env_file=None, extraction_backend="huggingface-space")
+        Settings(_env_file=None, extraction_backend="huggingface-space", hf_extraction_fallback_enabled=True)
     )
 
     class TimedOutBackend:

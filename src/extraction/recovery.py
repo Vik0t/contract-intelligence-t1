@@ -82,7 +82,7 @@ def recover_missing(result, text, request, schema, document_ir=None):
         f'JSON Schema:\n{json.dumps(selected_schema, ensure_ascii=False)}\n'
         f'<document>\n{context}\n</document>'
     )
-    from src.extraction.pipeline import parse_json_output
+    from src.extraction.json_output import parse_json_output
     trace['calls'] = 1
     data = parse_json_output(request(prompt))
     if not isinstance(data, dict):
