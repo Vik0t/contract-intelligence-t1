@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from src.extraction.context import PAGE_MARKER
+from src.extraction.grounding import source_quote
 
 DATE_LABEL_PATTERN = r'дата\s+(?:подписания(?:\s+договора)?|заключения(?:\s+договора)?|договора)\s*:'
 PLACE_LABEL_PATTERN = r'место\s+(?:подписания|заключения)(?:\s+договора)?\s*:'
@@ -67,6 +68,21 @@ def subject_region(text):
 
 def informative_subject_evidence(text, evidence):
     normalize = lambda s: ' '.join((s or '').casefold().split())
-    return bool(evidence and normalize(evidence) in normalize(subject_region(text))
-                and re.search(r'обязу\w*|предостав\w*|переда\w*|оказыва\w*|'
-                              r'объект\w*\s+страхован\w*|предмет\w*\s+(?:явля\w*|составля\w*)', evidence, re.I))
+    quote = source_quote(text, evidence or '')
+    if not quote:
+        return False
+    if normalize(quote) in normalize(subject_region(text)) and re.search(
+            r'обязу\w*|предостав\w*|переда\w*|оказыва\w*|'
+            r'объект\w*\s+страхован\w*|предмет\w*\s+(?:явля\w*|составля\w*)', quote, re.I):
+        return True
+    # A statement defining this agreement's scope is also direct evidence.
+    # It must belong to the opening provisions, not a licence or appendix.
+    main = re.split(r'(?im)^\s*ПРИЛОЖЕНИ[ЕЯ]\b', text, maxsplit=1)[0]
+    general = re.search(r'(?im)^\s*(?:\d+\.\s*)?ОБЩИЕ\s+ПОЛОЖЕНИЯ\b[^\n]*', main)
+    if not general:
+        return False
+    end = re.search(r'(?im)^\s*\d+\.\s+[^\d\s]', main[general.end():])
+    region = main[general.start():general.end() + end.start()] if end else main[general.start():]
+    return bool(normalize(quote) in normalize(region) and re.search(
+        r'настоящий\s+договор\b.{0,220}регулирует\s+отношени\w*.{0,120}связан\w*\s+с\s+\S+',
+        normalize(quote), re.I))

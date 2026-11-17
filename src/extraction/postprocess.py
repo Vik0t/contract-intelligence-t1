@@ -283,6 +283,8 @@ def _term_context(text: str, candidate: dict[str, Any]) -> str:
 
 
 def _term_semantic_type(context: str) -> str:
+    if "работ" in context and "выполнен" in context and "срок" in context:
+        return "work_completion_date"
     if ("займ" in context or "заем" in context) and any(
         word in context for word in ("возврат", "вернуть", "погаш")
     ):
@@ -308,6 +310,7 @@ def _term_candidate_score(
         "погаш": 9,
         "период оказания": 12,
         "оказания услуг": 7,
+        "срок выполнения работ": 10,
     }
     for cue, weight in strong_cues.items():
         if cue in context:

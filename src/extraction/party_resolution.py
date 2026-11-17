@@ -17,8 +17,24 @@ LEGAL_FORMS = {
 }
 
 
+def canonical_legal_name(name):
+    """Normalize OCR artifacts only in a legal form before a quoted name."""
+    if not isinstance(name, str):
+        return name
+    for pattern, replacement in ((r'^[оo0]{3}(?=\s+[«"“])', 'ООО'),
+                                 (r'^[аa][оo0](?=\s+[«"“])', 'АО')):
+        if re.search(pattern, name, re.I):
+            return re.sub(pattern, replacement, name, count=1, flags=re.I)
+    for full in LEGAL_FORMS:
+        pattern = r'^' + r'[\s—–-]+'.join(re.escape(word) for word in full.split()) + r'(?=\s+[«"“])'
+        match = re.match(pattern, name, re.I)
+        if match and re.search(r'[—–-]', match[0]):
+            return full.capitalize() + name[match.end():]
+    return name
+
+
 def identity(name):
-    value = ' '.join(unicodedata.normalize('NFKC', name or '').casefold().replace('ё', 'е').split())
+    value = ' '.join(unicodedata.normalize('NFKC', canonical_legal_name(name) or '').casefold().replace('ё', 'е').split())
     for full, short in LEGAL_FORMS.items():
         if value.startswith(full + ' '):
             value = short + value[len(full):]
@@ -27,16 +43,29 @@ def identity(name):
     return value.translate(str.maketrans('', '', '«»"“”')).strip()
 
 
+def _normalize_party_name(party):
+    previous = party.get('name')
+    canonical = canonical_legal_name(previous)
+    if canonical != previous:
+        variant = {'name': previous, 'evidence': party.get('name_evidence'),
+                   'page_number': party.get('name_page_number'), 'rule_id': 'ocr-legal-form-v1'}
+        variants = party.setdefault('name_source_variants', [])
+        if variant not in variants:
+            variants.append(variant)
+        party['name'] = canonical
+    return party
+
+
 def merge_parties(first, later):
     """A shared INN never collapses two different named entities."""
-    merged = deepcopy(first)
-    for party in later:
+    merged = [_normalize_party_name(p) for p in deepcopy(first)]
+    for source_party in later:
+        party = _normalize_party_name(deepcopy(source_party))
         key = identity(party.get('name'))
         candidates = [p for p in merged if key and identity(p.get('name')) == key]
         if not candidates and party.get('inn'):
             candidates = [p for p in merged if p.get('inn') == party['inn']
                           and (not key or not identity(p.get('name')))]
-        # Conflicting tax IDs for one name are retained as separate candidates.
         candidates = [p for p in candidates if not p.get('inn') or not party.get('inn') or p['inn'] == party['inn']]
         if len(candidates) == 1:
             existing = candidates[0]
@@ -57,11 +86,21 @@ def name_spans(name, text):
         if key.startswith(short + ' '):
             aliases.add(full + key[len(short):])
     matches = []
+    separator = r'[\s«»"“”]+'
     for alias in aliases:
         tokens = alias.split()
-        pattern = r'[\s«»"“”]+'.join(re.escape(token) for token in tokens)
+        pattern = separator.join(re.escape(token) for token in tokens)
         if alias.startswith('ооо '):
-            pattern = '[оo]{3}' + pattern[3:]
+            pattern = r'(?:[оo]{3}|[оo0]{3}(?=\s+[«"“]))' + pattern[3:]
+        elif alias.startswith('ао '):
+            pattern = r'(?:ао|[аa][оo0](?=\s+[«"“]))' + pattern[2:]
+        else:
+            for full in LEGAL_FORMS:
+                if alias.startswith(full + ' '):
+                    length = len(full.split())
+                    prefix = r'[\s—–-]+'.join(re.escape(token) for token in tokens[:length])
+                    pattern = prefix + separator + separator.join(re.escape(token) for token in tokens[length:])
+                    break
         matches.extend(re.finditer(r'(?<!\w)' + pattern + r'(?!\w)', text, re.I))
     return sorted(matches, key=lambda m: m.start())
 

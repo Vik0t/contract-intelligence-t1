@@ -64,7 +64,8 @@ def recover_header_fields(result, text):
             # Dates from a contract number, identity document or body are never
             # candidates. A date row must have an explicit label or a city prefix.
             clean = row.replace('|', ' ')
-            conventional = bool(re.match(r'^(?:г\.\s*|город\s+)', clean, re.I))
+            city_prefix = re.search(r'(?<!\w)(?:г\.\s*|город\s+)', clean, re.I)
+            conventional = city_prefix is not None
             if row != line and re.match(r'^(?:договор\b|номер\b|№)', clean, re.I):
                 continue
             if not (date_label or place_label or conventional):
@@ -76,6 +77,8 @@ def recover_header_fields(result, text):
             place_in_row = PLACE_LABEL.search(city_text)
             if place_in_row:
                 city_text = city_text[place_in_row.end():]
+            elif conventional:
+                city_text = city_text[city_prefix.start():]
             city_dates = _extract_date_candidates(city_text)
             if city_dates:
                 city_text = city_text[:city_dates[0]['start']]
@@ -117,6 +120,14 @@ def recover_header_fields(result, text):
                 item.update(status='needs_review', reason='В шапке найдены разные номера договора',
                             candidates=[{'value': v, 'evidence': q} for v,q in options.items()])
                 continue
+        if (key == 'place' and item.get('value') and len(options) == 1
+                and re.search(r'адрес|зарегистрирован|проживани|место\s+нахождения', item.get('evidence') or '', re.I)
+                and not re.search(r'подписан|место\s+(?:заключения|подписания)', item.get('evidence') or '', re.I)):
+            city, quote = next(iter(options.items()))
+            normalize = lambda value: ' '.join(re.sub(r'^(?:г\.\s*|город\s+)', '', value, flags=re.I).casefold().split())
+            if normalize(item['value']) != normalize(city):
+                item['source_correction'] = {'previous_value': item['value'], 'previous_evidence': item.get('evidence'), 'reason': 'address_instead_of_signing_place'}
+                item.update(value=None, status='needs_review', reason='Место подписания восстановлено из шапки; модель указала адрес стороны')
         if item.get('value') not in (None, ''):
             continue
         if len(options) == 1:

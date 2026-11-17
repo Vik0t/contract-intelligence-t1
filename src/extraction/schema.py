@@ -23,6 +23,7 @@ TERM_SEMANTIC_TYPES = [
     "contract_end_date",
     "loan_repayment_date",
     "service_period_end_date",
+    "work_completion_date",
 ]
 
 # Структура шаблона совпадает со структурой ожидаемого JSON.
@@ -109,10 +110,12 @@ contract_type:
 term:
 - value возвращай только в формате YYYY-MM-DD.
 - semantic_type выбирай только из:
-  contract_end_date, loan_repayment_date, service_period_end_date.
+  contract_end_date, loan_repayment_date, service_period_end_date, work_completion_date.
 - Выбирай дату окончания срока договора/займа/периода услуг, а не дату подписания.
 - Если написано "с X по Y", возвращай дату Y.
 - Для займа выбирай дату возврата или погашения займа.
+- Если срок договора — до полного исполнения обязательств, но указан календарный
+  срок выполнения работ, верни его с semantic_type=work_completion_date.
 - Игнорируй даты оплаты, платежей, поставки, гарантии, уведомлений, претензий и штрафов.
 - raw_value и evidence должны содержать исходную формулировку срока.
 

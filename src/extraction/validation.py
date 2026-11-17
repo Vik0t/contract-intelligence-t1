@@ -14,6 +14,7 @@ from src.extraction.context import evidence_pages
 from src.extraction.schema import CONTRACT_TYPE_LABELS, TERM_SEMANTIC_TYPES
 from src.extraction.reliability import assess_fields
 from src.extraction.party_resolution import merge_parties, link_from_source, name_spans
+from src.extraction.grounding import source_quote
 
 
 class FieldValue(BaseModel):
@@ -77,6 +78,9 @@ def validate_model_result(data: dict[str, Any], text: str) -> dict[str, Any]:
 
     def ground(item, evidence_key, page_key, value_keys):
         evidence = item.get(evidence_key)
+        if evidence and normalize(evidence) not in source:
+            evidence = source_quote(text, evidence)
+            item[evidence_key] = evidence
         if not evidence or normalize(evidence) not in source:
             for key in value_keys:
                 item[key] = None
@@ -156,8 +160,10 @@ def merge_extractions(results: list[dict[str, Any]], text: str = "", document_ir
     if text:
         from src.extraction.postprocess import postprocess_extraction, validate_extraction
         from src.extraction.header_fields import recover_header_fields
+        from src.extraction.source_facts import recover_explicit_facts
         merged = postprocess_extraction(merged, text)
         merged = recover_header_fields(merged, text)
+        merged = recover_explicit_facts(merged, text)
         if document_ir is not None:
             merged = validate_extraction(merged, document_ir)
         for key in ('contract_type', 'term', 'vat'):

@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
 
-RULES_VERSION = "2026-10-27.1"
+RULES_VERSION = "2026-11-16.2"
 CORE_FIELDS = ("contract_number", "contract_date", "parties", "total_amount")
 ROLE_MAPPING = {
     "заказчик": "Заказчик", "покупатель": "Заказчик", "арендатор": "Заказчик",
@@ -27,7 +27,10 @@ def canonical_role(role: str | None) -> str | None:
 def total_candidates(text: str) -> list[dict[str, Any]]:
     """Only explicit contract totals; advances, VAT and unit prices are not totals."""
     pattern = re.compile(
-        r"(?:общая\s+(?:сумма|стоимость)(?:\s+(?:настоящего\s+)?договора)?|(?:сумма|цена|стоимость)\s+(?:настоящего\s+)?договора)"
+        r"(?:общая\s+(?:сумма|стоимость)(?:\s+(?:работ|услуг|товара|товаров))?"
+        r"(?:\s+(?:по\s+)?(?:настоящему\s+|настоящего\s+)?договор[уа])?|"
+        r"(?:сумма|цена|стоимость)\s+(?:работ|услуг|товара|товаров)\s+по\s+(?:настоящему\s+)?договору|"
+        r"(?:сумма|цена|стоимость)\s+(?:настоящего\s+)?договора)"
         r"\s*(?:(?:составля[ею]т|равна|в размере)\s*|[:=|]\s*|[-–—]\s+)?"
         r"(?P<amount>-?\d+(?:[ \u00a0\u202f]\d{3})*(?:[.,]\d{1,2})?)",
         re.I,
@@ -41,6 +44,8 @@ def total_candidates(text: str) -> list[dict[str, Any]]:
         start = text.rfind("\n", 0, match.start()) + 1
         end = text.find("\n", match.end())
         evidence = text[start:end if end != -1 else len(text)].strip()
+        if re.search(r'ежемесячн|в\s+месяц|за\s+(?:один\s+)?(?:месяц|час|день|единиц)', evidence, re.I):
+            continue
         pages = re.findall(r"(?m)^PAGE (\d+)\s*$", text[:match.start()])
         candidate = {"value": value, "evidence": evidence, "page_number": int(pages[-1]) if pages else None}
         if not any(c["value"] == value and c["evidence"] == evidence for c in candidates):
