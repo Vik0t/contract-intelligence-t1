@@ -1,0 +1,59 @@
+name: contract-intelligence-api
+services:
+  db:
+    pull_policy: never
+    platform: linux/amd64
+    image: contract-intelligence-db:deploy-2026-11-20-api
+    environment:
+      POSTGRES_DB: contracts
+      POSTGRES_USER: contracts
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.server}
+    volumes: [database:/var/lib/postgresql/data]
+    networks: [private]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U contracts -d contracts"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    pull_policy: never
+    platform: linux/amd64
+    image: contract-intelligence-backend:deploy-2026-11-20-api
+    env_file: ${SERVER_ENV_FILE:-.env.server}
+    environment:
+      DATABASE_URL: postgresql://contracts:${POSTGRES_PASSWORD}@db:5432/contracts
+      DOCUMENT_STORAGE_DIR: /data/uploads
+      API_ROOT_PATH: /api
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes: [documents:/data]
+    networks: [private, edge]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+
+  frontend:
+    pull_policy: never
+    platform: linux/amd64
+    image: contract-intelligence-frontend:deploy-2026-11-20-api
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:8080"]
+    networks: [private, edge]
+    depends_on:
+      backend: {condition: service_healthy}
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/api/health/ready]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  database:
+  documents:
+networks:
+  private: {internal: true}
+  edge:

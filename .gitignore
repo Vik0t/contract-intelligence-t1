@@ -32,4 +32,8 @@ tmp
 !evals/pmi-control-v1/*.docx
 !evals/pmi-control-v1/results/v1.0.0-http.json
 
+# Public deployment instructions and synthetic validation evidence.
+!deploy/api/README.txt
+!deploy/api/live-validation-2026-11-20.json
+
 .DS_Store

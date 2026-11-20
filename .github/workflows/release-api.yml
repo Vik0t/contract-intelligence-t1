@@ -1,0 +1,66 @@
+name: Publish API deployment
+
+on:
+  push:
+    branches: [release/deepcode-api-2026-11-20]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-api-2026-11-20
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: deploy-2026-11-20-api
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build backend and frontend
+        run: |
+          mkdir -p work/release-logs
+          docker build --platform linux/amd64 --label org.opencontainers.image.revision="$GITHUB_SHA" -f Dockerfile.portable -t "contract-intelligence-backend:$RELEASE_TAG" . > work/release-logs/build-backend.log 2>&1
+          docker build --platform linux/amd64 --label org.opencontainers.image.revision="$GITHUB_SHA" -f frontend/Dockerfile -t "contract-intelligence-frontend:$RELEASE_TAG" . > work/release-logs/build-frontend.log 2>&1
+          docker pull --platform linux/amd64 postgres@sha256:9d9e487c1bd6413c52ccb3c02f46c8e37fa1e1d1a32a84519eb4e68d0ad1da30
+          docker tag postgres@sha256:9d9e487c1bd6413c52ccb3c02f46c8e37fa1e1d1a32a84519eb4e68d0ad1da30 "contract-intelligence-db:$RELEASE_TAG"
+      - name: Test API runtime
+        run: |
+          docker run --rm --user root --entrypoint sh \
+            -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e ML_ALLOW_EXTERNAL=false \
+            -e DATABASE_URL=sqlite:////tmp/tests.db -e DOCUMENT_STORAGE_DIR=/tmp/uploads \
+            -v "$GITHUB_WORKSPACE/tests:/app/tests:ro" -v "$GITHUB_WORKSPACE/evals:/app/evals:ro" \
+            -v "$GITHUB_WORKSPACE/tools:/app/tools:ro" -v "$GITHUB_WORKSPACE/deepseek_test.py:/app/deepseek_test.py:ro" \
+            "contract-intelligence-backend:$RELEASE_TAG" \
+            -c 'pip install --no-cache-dir pytest==9.1.1 && python -m pytest -q tests/test_api.py tests/test_portable_runtime.py tests/test_file_validation.py tests/test_delivery_profile.py tests/test_api_models.py tests/test_api_extraction.py tests/test_insights_api.py tests/test_document_view.py tests/test_risk_review.py tests/test_deployment_check.py --deselect tests/test_api_models.py::test_failed_preflight_saves_report_before_running_local_model' \
+            > work/release-logs/backend-tests.log 2>&1
+          tail -n 12 work/release-logs/backend-tests.log
+      - name: Test frontend
+        run: |
+          docker build --target build -f frontend/Dockerfile -t contract-intelligence-frontend-tests .
+          docker run --rm --network none contract-intelligence-frontend-tests npm test > work/release-logs/frontend-tests.log
+          tail -n 10 work/release-logs/frontend-tests.log
+      - name: Check runtime tools
+        run: |
+          docker run --rm --network none --entrypoint python "contract-intelligence-backend:$RELEASE_TAG" -m scripts.check_runtime --allow-cpu --skip-models
+      - name: Package and verify archive
+        run: |
+          python3 -m scripts.package_api_release --output work/release-dist --tag "$RELEASE_TAG" --logs work/release-logs
+          cd work/release-dist
+          sha256sum -c *.sha256
+          gzip -t *.tar.gz
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(git ls-remote origin "refs/tags/$RELEASE_TAG" | cut -f1)" = "$GITHUB_SHA"
+          else
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --title "DeepCode Qwen API — 2026-11-20" --notes-file deploy/api/RELEASE_NOTES.md
+          fi
+          gh release upload "$RELEASE_TAG" work/release-dist/*.tar.gz work/release-dist/*.sha256 --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

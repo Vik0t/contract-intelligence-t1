@@ -1,0 +1,75 @@
+{
+  "url": "http://frontend:8080",
+  "kind": "synthetic_end_to_end",
+  "records": [
+    {
+      "format": "pdf",
+      "passed": true,
+      "document_id": 1,
+      "field_checks": {
+        "contract_number": true,
+        "contract_date": true,
+        "contract_type": true,
+        "place": true,
+        "term": true,
+        "party1_name": true,
+        "party2_name": true,
+        "party1_inn": true,
+        "party2_inn": true,
+        "total_amount": true,
+        "vat": true
+      },
+      "summary_present": true,
+      "risks_found": 2,
+      "elapsed_sec": 12.13
+    },
+    {
+      "format": "docx",
+      "passed": true,
+      "document_id": 2,
+      "field_checks": {
+        "contract_number": true,
+        "contract_date": true,
+        "contract_type": true,
+        "place": true,
+        "term": true,
+        "party1_name": true,
+        "party2_name": true,
+        "party1_inn": true,
+        "party2_inn": true,
+        "total_amount": true,
+        "vat": true
+      },
+      "summary_present": true,
+      "risks_found": 2,
+      "elapsed_sec": 12.95
+    },
+    {
+      "format": "jpg",
+      "passed": true,
+      "document_id": 3,
+      "field_checks": {
+        "contract_number": true,
+        "contract_date": true,
+        "contract_type": true,
+        "place": true,
+        "term": true,
+        "party1_name": true,
+        "party2_name": true,
+        "party1_inn": true,
+        "party2_inn": true,
+        "total_amount": true,
+        "vat": true
+      },
+      "summary_present": true,
+      "risks_found": 2,
+      "elapsed_sec": 12.96
+    }
+  ],
+  "passed": true,
+  "tested_at": "2026-11-20T12:26:40.007060+07:00",
+  "api_provider": "deepcode",
+  "model": "qwen3.8-flash-next",
+  "source_commit": "555e7da4fcb1c4325a4fd455ff04479a3f0bc0b4",
+  "scope": "Local deployment; real external API; synthetic documents only; not a held-out quality evaluation"
+}

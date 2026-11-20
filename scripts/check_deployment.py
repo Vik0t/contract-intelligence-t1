@@ -34,6 +34,16 @@ def wait_for(client: httpx.Client, document_id: int, predicate, timeout: float) 
     raise TimeoutError(f"Document {document_id} did not reach the expected state in {timeout}s")
 
 
+def wait_for_analysis(client: httpx.Client, document_id: int, timeout: float) -> dict:
+    document = wait_for(client, document_id, lambda item: item["status"] in {"ready", "extracted"}, timeout)
+    if document["status"] == "ready":
+        # Auto-extraction can start between the GET and this POST.
+        response = client.post(f"/documents/{document_id}/analyze")
+        if response.status_code != 409:
+            response.raise_for_status()
+    return wait_for(client, document_id, lambda item: bool((item.get("metadata") or {}).get("summary")), timeout)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:8080")
@@ -66,9 +76,7 @@ def main() -> None:
                     response.raise_for_status()
                     document_id = response.json()["document_id"]
                     record["document_id"] = document_id
-                    wait_for(client, document_id, lambda item: item["status"] == "ready", args.timeout)
-                    client.post(f"/documents/{document_id}/analyze").raise_for_status()
-                    document = wait_for(client, document_id, lambda item: bool((item.get("metadata") or {}).get("summary")), args.timeout)
+                    document = wait_for_analysis(client, document_id, args.timeout)
                     metadata = document["metadata"]
                     checks = score(metadata["fields"])
                     record["field_checks"] = checks
