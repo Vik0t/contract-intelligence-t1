@@ -38,7 +38,11 @@ EXPECTED = {
 
 
 def fixtures(directory: Path) -> dict[str, Path]:
-    font_candidates = [Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), Path("/System/Library/Fonts/Supplemental/Arial.ttf")]
+    font_candidates = [
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/TTF/DejaVuSans.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+    ]
     font_path = next((item for item in font_candidates if item.is_file()), None)
     if not font_path:
         raise RuntimeError("Для тестового документа нужен шрифт DejaVu Sans или Arial с кириллицей")
