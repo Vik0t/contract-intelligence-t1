@@ -29,6 +29,12 @@ class ValidationErrorResponse(BaseModel):
     detail: str | List[Dict[str, Any]]
 
 
+class ReadinessResponse(BaseModel):
+    status: Literal['ready']
+    database: Literal['ok']
+    extraction: Literal['local', 'huggingface-space', 'api', 'rules']
+
+
 def error_responses(*status_codes: int) -> Dict[int, Dict[str, Any]]:
     """Describe only the errors that an individual operation can return."""
     descriptions = {

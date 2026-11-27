@@ -58,6 +58,13 @@ Check if the service is alive.
 |------|-------------|
 | 200 | Service is running |
 
+### Readiness
+
+`GET /health/ready` checks the application and its database connection. HTTP 200
+returns `{"status":"ready","database":"ok","extraction":"api"}` (the extraction
+value reflects the configured backend). An unavailable database returns HTTP 503
+with `{"detail":"Database unavailable"}`. This endpoint does not probe DeepCode.
+
 ### Error responses
 
 The live OpenAPI describes errors on each applicable operation. HTTP

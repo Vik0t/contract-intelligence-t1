@@ -90,7 +90,19 @@ async def ping():
     return "pong!"
 
 
-@app.get("/health/ready", include_in_schema=False)
+@app.get(
+    "/health/ready",
+    response_model=api_requests.ReadinessResponse,
+    responses={
+        503: {
+            **api_requests.error_responses(503)[503],
+            'description': 'The readiness database check failed',
+            'content': {'application/json': {'example': {'detail': 'Database unavailable'}}},
+        },
+    },
+    summary="Check application and database readiness",
+    description="Checks the database connection. Does not probe the external model API.",
+)
 async def readiness():
     from sqlalchemy import text
     try:

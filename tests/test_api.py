@@ -1530,6 +1530,28 @@ def test_openapi_matches_backend_upload_rejection(monkeypatch):
     assert_documented_json(oversized, '/documents', 'post')
 
 
+def test_readiness_and_database_failure_match_openapi(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    headers = get_auth_header()
+    ready = client.get('/health/ready')
+    assert ready.status_code == 200
+    assert ready.json() == {'status': 'ready', 'database': 'ok', 'extraction': app_module.settings.extraction_backend}
+    assert_documented_json(ready, '/health/ready')
+
+    def unavailable():
+        raise OperationalError('SELECT 1', {}, RuntimeError('synthetic database outage'))
+
+    monkeypatch.setattr(app_module.engine, 'connect', unavailable)
+    unready = client.get('/health/ready')
+    assert unready.status_code == 503
+    assert unready.json() == {'detail': 'Database unavailable'}
+    assert_documented_json(unready, '/health/ready')
+    registry = client.get('/documents', headers=headers)
+    assert registry.status_code == 503
+    assert_documented_json(registry, '/documents')
+
+
 def test_openapi_matches_both_folder_validation_formats():
     headers = get_auth_header()
     for payload, detail_type in (({'name': '   '}, str), ({}, list)):
