@@ -13,10 +13,18 @@ MODEL_FILES = ["*.json", "*.safetensors", "*.bin", "*.model", "*.tiktoken", "*.t
 
 
 def model_specs() -> list[tuple[str, str | None]]:
-    return [
-        (os.getenv("CONTRACT_MODEL_ID", "numind/NuExtract3"), os.getenv("CONTRACT_MODEL_REVISION") or None),
-        (os.getenv("SUMMARY_LOCAL_MODEL_NAME", "Qwen/Qwen3-8B"), os.getenv("SUMMARY_LOCAL_MODEL_REVISION") or None),
-    ]
+    """Only require weights for the stages that actually run locally."""
+    extraction = os.getenv("EXTRACTION_BACKEND", "local")
+    if extraction == "rules":
+        return []
+    models = []
+    if extraction == "local":
+        models.append((os.getenv("CONTRACT_MODEL_ID", "numind/NuExtract3"),
+                       os.getenv("CONTRACT_MODEL_REVISION") or None))
+    if any(os.getenv(name, "local") == "local" for name in ("SUMMARY_BACKEND", "RISK_BACKEND")):
+        models.append((os.getenv("SUMMARY_LOCAL_MODEL_NAME", "Qwen/Qwen3-8B"),
+                       os.getenv("SUMMARY_LOCAL_MODEL_REVISION") or None))
+    return list(dict.fromkeys(models))
 
 
 def verify_weights(folder: Path) -> None:

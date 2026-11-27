@@ -84,10 +84,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path("tmp/ml-check.json"))
     parser.add_argument("--parsing-only", action="store_true")
-    parser.add_argument("--backend", choices=["local", "api"], default="local")
+    parser.add_argument("--backend", choices=["local", "api", "huggingface-space", "rules"],
+                        default=os.getenv('EXTRACTION_BACKEND', 'local'))
+    parser.add_argument("--summary-backend", choices=["local", "api"], help="Overrides SUMMARY_BACKEND")
+    parser.add_argument("--risk-backend", choices=["local", "api"], help="Overrides RISK_BACKEND")
     args = parser.parse_args()
-    # Only an explicit --backend api enables external calls with synthetic data.
-    os.environ.update(ML_ALLOW_EXTERNAL="true" if args.backend == "api" else "false", EXTRACTION_BACKEND=args.backend, SUMMARY_BACKEND=args.backend, RISK_BACKEND=args.backend)
+    default_insights = args.backend if args.backend in {'local', 'api'} else 'local'
+    summary = args.summary_backend or os.getenv('SUMMARY_BACKEND', default_insights)
+    risk = args.risk_backend or os.getenv('RISK_BACKEND', default_insights)
+    backends = (args.backend, summary, risk)
+    os.environ.update(EXTRACTION_BACKEND=args.backend, SUMMARY_BACKEND=summary, RISK_BACKEND=risk)
+    os.environ.setdefault('ML_ALLOW_EXTERNAL', 'true' if any(b in {'api', 'huggingface-space'} for b in backends) else 'false')
     from backend.config import Settings
     from backend.extraction import ExtractionService
     from backend.document_view import view_pdf_path
@@ -95,12 +102,15 @@ def main() -> None:
     from src.extraction.summary import summarize_document
     from src.extraction.risk_review import review_contract_risks
     from src.extraction.context import evidence_pages
-    from scripts.check_runtime import check_runtime
+    from scripts.check_runtime import check_runtime, model_specs
 
     report = {"created_at": datetime.now(timezone.utc).isoformat(), "kind": "parsing" if args.parsing_only else "real_model_acceptance", "records": [], "limitations": ["Synthetic smoke test; held-out contracts and human review are required to establish accuracy."]}
     if not args.parsing_only:
-        report["runtime"] = check_runtime(require_gpu=args.backend == "local", require_models=args.backend == "local")
+        local_models = bool(model_specs())
+        report["runtime"] = check_runtime(require_gpu=local_models, require_models=local_models)
     report["backend"] = args.backend
+    report["summary_backend"] = summary
+    report["risk_backend"] = risk
     service = ExtractionService(Settings(_env_file=None, extraction_backend=args.backend))
     with tempfile.TemporaryDirectory(prefix="contract-ml-check-") as temporary:
         for format_name, source in fixtures(Path(temporary)).items():
