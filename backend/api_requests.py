@@ -16,6 +16,39 @@ class UserRole(str, Enum):
     USER = 'user'
     ADMIN = 'admin'
 
+
+class ErrorResponse(BaseModel):
+    """The JSON body returned by HTTPException and the database error handler."""
+
+    detail: str = Field(description="Human-readable reason for the failed request")
+
+
+class ValidationErrorResponse(BaseModel):
+    """Routes with explicit validation can return text or FastAPI field errors."""
+
+    detail: str | List[Dict[str, Any]]
+
+
+def error_responses(*status_codes: int) -> Dict[int, Dict[str, Any]]:
+    """Describe only the errors that an individual operation can return."""
+    descriptions = {
+        400: 'Request rejected: duplicate user, invalid file or document not ready',
+        401: 'Invalid authentication scheme or invalid/expired session credentials',
+        403: 'The authenticated user does not have access to this document',
+        404: 'The requested document, folder, original file or source was not found',
+        409: 'Document processing or the current document state conflicts with the request',
+        413: 'Request body exceeds the upload limit (50 MiB in the supplied deployment)',
+        422: 'Invalid request fields or an explicitly rejected value',
+        503: 'The database or a required document rendering service is unavailable',
+    }
+    return {
+        code: {
+            'model': ValidationErrorResponse if code == 422 else ErrorResponse,
+            'description': descriptions[code],
+        }
+        for code in status_codes
+    }
+
 # ============ AUTHENTICATION TYPES ============
 
 class UserCreateRequest(BaseModel):

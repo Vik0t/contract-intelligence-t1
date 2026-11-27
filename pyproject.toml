@@ -103,6 +103,7 @@ torchvision = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32'" }]
 
 [dependency-groups]
 dev = [
+    "jsonschema==4.26.0",
     "pytest==9.1.1",
 ]
 

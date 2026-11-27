@@ -549,6 +549,7 @@ JOB_MANAGER = JobManager(
 
 @app.post(
     "/auth/register",
+    responses=api_requests.error_responses(400, 503),
     response_model=api_requests.UserCreateResponse,
     summary="Register a new user",
     description="Create a new user account with username, email, and password"
@@ -586,6 +587,7 @@ async def register(user_data: api_requests.UserCreateRequest):
 
 @app.post(
     "/auth/login",
+    responses=api_requests.error_responses(401, 503),
     response_model=api_requests.UserLoginResponse,
     summary="Login user",
     description="Authenticate user and return session token"
@@ -616,6 +618,7 @@ async def login(login_data: api_requests.UserLoginRequest):
 
 @app.post(
     "/auth/logout",
+    responses=api_requests.error_responses(401, 503),
     response_model=api_requests.LogoutResponse,
     summary="Logout user",
     description="Invalidate session token"
@@ -644,6 +647,7 @@ async def logout(logout_data: api_requests.LogoutRequest):
 
 @app.post(
     "/auth/validate",
+    responses=api_requests.error_responses(503),
     response_model=api_requests.SessionValidateResponse,
     summary="Validate session",
     description="Validate session token"
@@ -715,6 +719,7 @@ async def validate_session(session_data: api_requests.SessionValidateRequest):
 
 @app.get(
     "/users/me",
+    responses=api_requests.error_responses(401, 503),
     response_model=api_requests.UserResponse,
     summary="Get current user",
     description="Get current authenticated user's profile"
@@ -736,6 +741,7 @@ async def get_current_user(authorization: str = Header(...)):
 
 @app.put(
     "/users/me",
+    responses=api_requests.error_responses(400, 401, 503),
     response_model=api_requests.UserUpdateResponse,
     summary="Update current user",
     description="Update current authenticated user's profile"
@@ -787,6 +793,7 @@ async def update_current_user(
 
 @app.delete(
     "/users/me",
+    responses=api_requests.error_responses(401, 503),
     response_model=api_requests.UserDeleteResponse,
     summary="Delete current user",
     description="Delete current authenticated user's account"
@@ -822,6 +829,7 @@ async def delete_current_user(authorization: str = Header(...)):
 
 @app.post(
     "/documents",
+    responses=api_requests.error_responses(400, 401, 404, 413, 503),
     response_model=api_requests.DocumentUploadResponse,
     status_code=202,
     summary="Upload document",
@@ -941,6 +949,7 @@ async def upload_document(
             
 
 @app.post('/documents/batch', response_model=api_requests.BatchUploadResponse, status_code=207,
+    responses=api_requests.error_responses(401, 413, 422, 503),
           summary='Upload multiple documents, isolating individual failures')
 async def upload_documents(files: list[UploadFile] = File(...), template_id: Optional[int] = Form(None),
                            folder_id: Optional[int] = Form(None), authorization: str = Header(...)):
@@ -969,6 +978,7 @@ async def upload_documents(files: list[UploadFile] = File(...), template_id: Opt
 
 @app.get(
     "/documents",
+    responses=api_requests.error_responses(401, 503),
     response_model=api_requests.DocumentListResponse,
     summary="List documents",
     description="Get all documents for current user"
@@ -1021,6 +1031,7 @@ async def list_documents(
 
 @app.get(
     "/documents/{document_id}",
+    responses=api_requests.error_responses(401, 403, 404, 503),
     response_model=api_requests.DocumentMetadataResponse,
     summary="Get document",
     description="Get document by ID with its metadata"
@@ -1071,6 +1082,7 @@ async def get_document(
 
 @app.delete(
     "/documents/{document_id}",
+    responses=api_requests.error_responses(401, 403, 404, 503),
     response_model=api_requests.DocumentDeleteResponse,
     summary="Delete document",
     description="Delete document by ID"
@@ -1112,6 +1124,7 @@ async def delete_document(
 
 @app.post(
     "/documents/{document_id}/analyze",
+    responses=api_requests.error_responses(400, 401, 403, 404, 409, 503),
     response_model=api_requests.DocumentResponse,
     summary="Start metadata analysis",
     description="Start asynchronous metadata extraction for a parsed document"
@@ -1155,6 +1168,7 @@ async def analyze_document(
 
 @app.patch(
     "/documents/{document_id}/metadata",
+    responses=api_requests.error_responses(401, 403, 404, 503),
     response_model=api_requests.DocumentMetadataResponse,
     summary="Edit metadata",
     description="Save manually edited metadata fields"
@@ -1240,6 +1254,7 @@ async def update_document_metadata(
 
 @app.patch(
     "/documents/{document_id}/review",
+    responses=api_requests.error_responses(401, 403, 404, 409, 503),
     response_model=api_requests.DocumentMetadataResponse,
     summary="Confirm operator review",
     description="Mark extracted document data as reviewed or return it to review",
@@ -1284,6 +1299,7 @@ async def update_document_review(
 
 @app.post(
     "/documents/{document_id}/metadata",
+    responses=api_requests.error_responses(400, 401, 403, 404, 409, 503),
     response_model=api_requests.MetadataExtractResponse,
     status_code=202,
     summary="Queue metadata extraction",
@@ -1329,6 +1345,7 @@ async def extract_metadata(
 
 @app.get(
     "/stats",
+    responses=api_requests.error_responses(401, 503),
     response_model=api_requests.StatsResponse,
     summary="Get statistics",
     description="Get extraction statistics for the current user"
@@ -1414,6 +1431,7 @@ async def get_stats(
 
 @app.get(
     "/folders",
+    responses=api_requests.error_responses(401, 503),
     response_model=api_requests.FolderListResponse,
     summary="List folders",
     description="Get folders for the current user"
@@ -1434,6 +1452,7 @@ async def list_folders(authorization: str = Header(...)):
 
 @app.post(
     "/folders",
+    responses=api_requests.error_responses(401, 409, 422, 503),
     response_model=api_requests.FolderResponse,
     summary="Create folder",
     description="Create a folder for the current user"
@@ -1464,6 +1483,7 @@ async def create_folder(
 
 @app.patch(
     "/folders/{folder_id}",
+    responses=api_requests.error_responses(401, 404, 422, 503),
     response_model=api_requests.FolderResponse,
     summary="Rename folder",
     description="Rename a folder owned by the current user"
@@ -1492,6 +1512,7 @@ async def rename_folder(
 
 @app.delete(
     "/folders/{folder_id}",
+    responses=api_requests.error_responses(401, 404, 503),
     response_model=api_requests.DocumentDeleteResponse,
     summary="Delete folder",
     description="Delete a folder and move its documents to the root"
@@ -1516,6 +1537,7 @@ async def remove_folder(folder_id: int, authorization: str = Header(...)):
 
 @app.patch(
     "/documents/{document_id}",
+    responses=api_requests.error_responses(401, 403, 404, 503),
     response_model=api_requests.DocumentResponse,
     summary="Move document",
     description="Move a document to a folder or back to the root"
@@ -1548,6 +1570,7 @@ async def update_document(
 
 @app.get(
     "/documents/{document_id}/content",
+    responses=api_requests.error_responses(401, 403, 404, 409, 503),
     response_model=api_requests.DocumentContentResponse,
     response_model_exclude_none=True,
     summary="Read parsed document content",
@@ -1587,7 +1610,15 @@ async def get_document_content(document_id: int, authorization: str = Header(...
         db.close()
 
 
-@app.get('/documents/{document_id}/pages/{page_number}/image', summary='Render original document page')
+@app.get(
+    '/documents/{document_id}/pages/{page_number}/image',
+    response_class=Response,
+    responses={
+        **api_requests.error_responses(401, 403, 404, 503),
+        200: {'content': {'image/png': {'schema': {'type': 'string', 'format': 'binary'}}}},
+    },
+    summary='Render original document page',
+)
 async def get_document_page_image(document_id: int, page_number: int, authorization: str = Header(...)):
     if not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Invalid authentication scheme')
@@ -1610,7 +1641,7 @@ async def get_document_page_image(document_id: int, page_number: int, authorizat
         db.close()
 
 
-@app.post('/documents/{document_id}/source-location', summary='Locate evidence on original pages')
+@app.post('/documents/{document_id}/source-location', summary='Locate evidence on original pages', responses=api_requests.error_responses(401, 403, 404, 503))
 async def get_source_location(document_id: int, body: api_requests.SourceLocationRequest, authorization: str = Header(...)):
     if not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Invalid authentication scheme')
@@ -1634,7 +1665,7 @@ async def get_source_location(document_id: int, body: api_requests.SourceLocatio
         db.close()
 
 
-@app.post('/documents/{document_id}/insights', summary='Generate summary')
+@app.post('/documents/{document_id}/insights', summary='Generate summary', responses=api_requests.error_responses(401, 403, 404, 409, 503))
 async def refresh_document_insights(document_id: int, authorization: str = Header(...)):
     if not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Invalid authentication scheme')
@@ -1661,7 +1692,7 @@ async def refresh_document_insights(document_id: int, authorization: str = Heade
         db.close()
 
 
-@app.post('/documents/{document_id}/risks', summary='Review supply or services contract from the selected side')
+@app.post('/documents/{document_id}/risks', summary='Review supply or services contract from the selected side', responses=api_requests.error_responses(401, 403, 404, 409, 503))
 async def review_document_risks(document_id: int, profile: RiskProfile, authorization: str = Header(...)):
     if not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Invalid authentication scheme')
@@ -1698,6 +1729,11 @@ async def review_document_risks(document_id: int, profile: RiskProfile, authoriz
 
 @app.get(
     "/documents/{document_id}/preview",
+    response_class=Response,
+    responses={
+        **api_requests.error_responses(401, 403, 404, 503),
+        200: {'content': {'image/png': {'schema': {'type': 'string', 'format': 'binary'}}}},
+    },
     summary="Preview document",
     description="Return a lightweight first-page preview for the document library",
 )
@@ -1726,6 +1762,20 @@ async def get_document_preview(document_id: int, authorization: str = Header(...
 
 @app.get(
     "/documents/{document_id}/file",
+    response_class=FileResponse,
+    responses={
+        **api_requests.error_responses(401, 403, 404, 503),
+        200: {
+            'content': {
+                media_type: {'schema': {'type': 'string', 'format': 'binary'}}
+                for media_type in (
+                    'application/pdf',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'image/jpeg', 'image/png', 'application/octet-stream',
+                )
+            },
+        },
+    },
     summary="Open document file",
     description="Return the original uploaded document"
 )

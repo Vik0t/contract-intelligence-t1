@@ -58,6 +58,16 @@ Check if the service is alive.
 |------|-------------|
 | 200 | Service is running |
 
+### Error responses
+
+The live OpenAPI describes errors on each applicable operation. HTTP
+400/401/403/404/409/413/503 use `ErrorResponse`: an object with a required string
+`detail`. HTTP 403 means an authenticated user requested another user's document;
+folder ownership failures use 404. Missing required authentication headers and
+invalid request fields continue to use FastAPI's HTTP 422 validation response.
+The batch and folder operations can also reject a value with a string `detail`;
+their 422 schema describes both forms.
+
 ---
 
 ## 👤 Authentication

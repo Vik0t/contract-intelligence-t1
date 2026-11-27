@@ -1439,3 +1439,122 @@ def test_retry_without_original_explains_recovery():
     response = client.post(f'/documents/{ident}/analyze', headers=headers)
     assert response.status_code == 400
     assert 'Загрузите документ снова' in response.json()['detail']
+
+
+def assert_documented_json(response, path, method='get'):
+    from jsonschema import Draft202012Validator, FormatChecker
+
+    specification = app.openapi()
+    definition = specification['paths'][path][method]['responses'][str(response.status_code)]
+    assert response.headers['content-type'].startswith('application/json')
+    schema = definition['content']['application/json']['schema']
+    Draft202012Validator({**schema, 'components': specification['components']},
+                         format_checker=FormatChecker()).validate(response.json())
+
+
+def test_openapi_describes_handler_and_ownership_errors():
+    """A newly raised HTTP error must not silently disappear from the API contract."""
+    import ast
+    import inspect
+    from fastapi.routing import APIRoute
+
+    specification = app.openapi()
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or not route.include_in_schema:
+            continue
+        source = ast.parse(inspect.getsource(route.endpoint))
+        raised_codes = set()
+        for node in ast.walk(source):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id == 'HTTPException':
+                raised_codes.update(keyword.value.value for keyword in node.keywords
+                                    if keyword.arg == 'status_code' and isinstance(keyword.value, ast.Constant))
+            if node.func.id == 'verify_document_ownership':
+                raised_codes.add(403)
+        for method in route.methods:
+            responses = specification['paths'][route.path][method.lower()]['responses']
+            assert {str(code) for code in raised_codes} <= responses.keys(), (method, route.path, raised_codes)
+
+
+def test_openapi_matches_registration_and_authentication_errors():
+    headers = get_auth_header()
+    duplicate = client.post('/auth/register', json={
+        'username': TEST_USERNAME, 'email': TEST_EMAIL, 'password': TEST_PASSWORD,
+    })
+    assert duplicate.status_code == 400
+    assert_documented_json(duplicate, '/auth/register', 'post')
+    invalid_login = client.post('/auth/login', json={'username': TEST_USERNAME, 'password': 'wrong'})
+    assert invalid_login.status_code == 401
+    assert_documented_json(invalid_login, '/auth/login', 'post')
+    invalid_token = client.get('/documents', headers={'Authorization': 'Bearer invalid-session'})
+    assert invalid_token.status_code == 401
+    assert_documented_json(invalid_token, '/documents')
+    missing_header = client.get('/documents')
+    assert missing_header.status_code == 422
+    assert_documented_json(missing_header, '/documents')
+    assert_documented_json(client.get('/documents', headers=headers), '/documents')
+
+
+def test_openapi_matches_document_access_and_not_found_errors():
+    owner = get_auth_header()
+    other = get_auth_header(username='secondoperator', email='second@example.com')
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        document = database.create_document(db, owner=user.id, template_id=None, filename='synthetic.pdf')
+        ident = document.id
+    for method, suffix, payload in (
+        ('get', '', None), ('delete', '', None), ('post', '/analyze', None),
+        ('get', '/content', None), ('get', '/file', None), ('get', '/preview', None),
+        ('get', '/pages/1/image', None),
+        ('patch', '/metadata', {'fields': {}}),
+        ('post', '/source-location', {'evidence': 'Synthetic evidence'}),
+    ):
+        response = client.request(method, f'/documents/{ident}{suffix}', headers=other, json=payload)
+        assert response.status_code == 403, (method, suffix, response.text)
+        path = '/documents/{document_id}' + suffix.replace('/pages/1/', '/pages/{page_number}/')
+        assert_documented_json(response, path, method)
+    missing = client.get('/documents/999999', headers=owner)
+    assert missing.status_code == 404
+    assert_documented_json(missing, '/documents/{document_id}')
+
+
+def test_openapi_matches_backend_upload_rejection(monkeypatch):
+    headers = get_auth_header()
+    rejected = client.post('/documents', headers=headers, files={'file': ('file.txt', b'synthetic')})
+    assert rejected.status_code == 400
+    assert_documented_json(rejected, '/documents', 'post')
+    monkeypatch.setattr(app_module.settings, 'max_upload_size_mb', 1)
+    oversized = client.post('/documents', headers=headers, files={'file': ('large.pdf', b'x' * (1024 * 1024 + 1))})
+    assert oversized.status_code == 413
+    assert_documented_json(oversized, '/documents', 'post')
+
+
+def test_openapi_matches_both_folder_validation_formats():
+    headers = get_auth_header()
+    for payload, detail_type in (({'name': '   '}, str), ({}, list)):
+        response = client.post('/folders', headers=headers, json=payload)
+        assert response.status_code == 422
+        assert isinstance(response.json()['detail'], detail_type)
+        assert_documented_json(response, '/folders', 'post')
+
+
+def test_openapi_matches_both_batch_validation_formats():
+    headers = get_auth_header()
+    missing = client.post('/documents/batch', headers=headers)
+    assert missing.status_code == 422
+    assert isinstance(missing.json()['detail'], list)
+    assert_documented_json(missing, '/documents/batch', 'post')
+    too_many = client.post('/documents/batch', headers=headers,
+                           files=[('files', (f'{index}.txt', b'synthetic')) for index in range(101)])
+    assert too_many.status_code == 422
+    assert isinstance(too_many.json()['detail'], str)
+    assert_documented_json(too_many, '/documents/batch', 'post')
+
+
+def test_openapi_binary_successes_do_not_claim_json():
+    paths = app.openapi()['paths']
+    for path in ('/documents/{document_id}/preview', '/documents/{document_id}/pages/{page_number}/image'):
+        assert set(paths[path]['get']['responses']['200']['content']) == {'image/png'}
+        assert 'application/json' in paths[path]['get']['responses']['404']['content']
+    assert 'application/pdf' in paths['/documents/{document_id}/file']['get']['responses']['200']['content']

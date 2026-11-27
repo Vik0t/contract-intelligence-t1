@@ -35,7 +35,7 @@ jobs:
             -v "$GITHUB_WORKSPACE/deploy:/app/deploy:ro" \
             -v "$GITHUB_WORKSPACE/tools:/app/tools:ro" -v "$GITHUB_WORKSPACE/deepseek_test.py:/app/deepseek_test.py:ro" \
             "contract-intelligence-backend:$RELEASE_TAG" \
-            -c 'pip install --no-cache-dir pytest==9.1.1 && python -m pytest -q tests/test_api.py tests/test_portable_runtime.py tests/test_file_validation.py tests/test_delivery_profile.py tests/test_api_models.py tests/test_api_extraction.py tests/test_insights_api.py tests/test_document_view.py tests/test_risk_review.py tests/test_server_runtime.py tests/test_extraction_service.py tests/test_model_provenance.py tests/test_api_release_package.py tests/test_ml_check_config.py --deselect tests/test_api_models.py::test_failed_preflight_saves_report_before_running_local_model' \
+            -c 'pip install --no-cache-dir pytest==9.1.1 jsonschema==4.26.0 && python -m pytest -q tests/test_api.py tests/test_portable_runtime.py tests/test_file_validation.py tests/test_delivery_profile.py tests/test_api_models.py tests/test_api_extraction.py tests/test_insights_api.py tests/test_document_view.py tests/test_risk_review.py tests/test_server_runtime.py tests/test_extraction_service.py tests/test_model_provenance.py tests/test_api_release_package.py tests/test_ml_check_config.py --deselect tests/test_api_models.py::test_failed_preflight_saves_report_before_running_local_model' \
             > work/release-logs/backend-tests.log 2>&1
           tail -n 12 work/release-logs/backend-tests.log
       - name: Test frontend
