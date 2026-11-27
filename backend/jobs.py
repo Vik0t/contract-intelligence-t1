@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class JobManager:
     """Small durable job runner for the single-GPU local deployment.
 
-    The database is the source of truth. The executor only performs work for
+    The database is the source of truth. The executors only perform work for
     queued rows, so a restart can recover interrupted jobs. A real multi-worker
     deployment should replace this class with Redis/Celery/RQ and keep one GPU
     worker per device.
@@ -36,6 +36,12 @@ class JobManager:
         self.executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="contract-job",
+        )
+        # API summaries must not occupy the parsing/extraction worker.
+        # Local inference still shares MODEL_LOCK with extraction.
+        self.summary_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="contract-summary",
         )
         self._lock = threading.RLock()
         self._futures: dict[int, Future] = {}
@@ -79,13 +85,18 @@ class JobManager:
                 self._submit(job_id)
 
     def _submit(self, job_id: int) -> None:
+        with database.get_session(self.engine) as db:
+            job = database.get_job(db, job_id)
+            if job is None:
+                return
+            executor = self.summary_executor if job.kind == "summary" else self.executor
         with self._lock:
             if self._shutdown:
                 return
             future = self._futures.get(job_id)
             if future is not None and not future.done():
                 return
-            future = self.executor.submit(self._run, job_id)
+            future = executor.submit(self._run, job_id)
             self._futures[job_id] = future
             future.add_done_callback(
                 lambda _future, completed_job_id=job_id: self._forget_future(completed_job_id)
@@ -118,7 +129,7 @@ class JobManager:
             check_db = database.get_session(self.engine)
             try:
                 document = database.get_document(check_db, document_id)
-                failed = document is not None and document.processing_status == "failed"
+                failed = kind != "summary" and document is not None and document.processing_status == "failed"
                 error = document.processing_error if failed else None
             finally:
                 check_db.close()
@@ -187,3 +198,4 @@ class JobManager:
         for timer in timers:
             timer.cancel()
         self.executor.shutdown(wait=True, cancel_futures=True)
+        self.summary_executor.shutdown(wait=True, cancel_futures=True)

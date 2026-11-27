@@ -1354,6 +1354,108 @@ def test_api_model_identity_is_saved_without_local_revision(monkeypatch):
         assert database.get_metadata(db, ident).fields['_provenance']['model'] == 'provider/actual-model'
 
 
+def test_automatic_summary_does_not_block_next_extraction(monkeypatch):
+    import time
+    from threading import Event
+    from src.extraction.rules import extract_with_rules
+
+    headers = get_auth_header()
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        ids = []
+        for number in ('41', '42'):
+            doc = database.create_document(db, owner=user.id, template_id=None, filename=f'{number}.pdf')
+            database.create_parsed_document(db, doc.id, f'PAGE 1\nДоговор № {number}')
+            database.update_document(db, doc.id, processing_status='processing')
+            ids.append(doc.id)
+
+    summary_started, release_summary = Event(), Event()
+
+    def slow_summary(*_args):
+        summary_started.set()
+        assert release_summary.wait(10)
+        return 'Сводка договора.'
+
+    monkeypatch.setattr(app_module.settings, 'extraction_backend', 'api')
+    monkeypatch.setattr(app_module.EXTRACTION_SERVICE, 'extract', lambda **kw: extract_with_rules(kw['text']))
+    monkeypatch.setattr(app_module, 'summarize_document', slow_summary)
+    try:
+        app_module.JOB_MANAGER.enqueue(ids[0], 'extract')
+        assert summary_started.wait(5)
+        second_job = app_module.JOB_MANAGER.enqueue(ids[1], 'extract')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with database.get_session(app_module.engine) as db:
+                if database.get_job(db, second_job).status == 'completed':
+                    break
+            time.sleep(.01)
+        else:
+            pytest.fail('Extraction waited for the previous summary')
+        saved = client.get(f'/documents/{ids[1]}', headers=headers).json()
+        assert saved['status'] == 'extracted'
+        assert saved['metadata']['fields']['contract_number']['value'] == '42'
+        with database.get_session(app_module.engine) as db:
+            assert database.get_active_job(db, ids[0], 'summary').status == 'running'
+        assert not release_summary.is_set()
+    finally:
+        release_summary.set()
+
+
+def test_automatic_summary_error_preserves_extracted_fields(monkeypatch):
+    import time
+
+    headers = get_auth_header()
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        doc = database.create_document(db, owner=user.id, template_id=None, filename='summary-error.pdf')
+        database.create_parsed_document(db, doc.id, 'Договор № 42')
+        database.create_metadata(db, doc.id, {'contract_number': {'value': '42'}})
+        database.update_document(db, doc.id, processing_status='extracted')
+        ident = doc.id
+
+    def unavailable(*_args):
+        raise RuntimeError('Synthetic summary service failure')
+
+    monkeypatch.setattr(app_module, 'summarize_document', unavailable)
+    monkeypatch.setattr(app_module.JOB_MANAGER, 'max_attempts', 1)
+    job_id = app_module.JOB_MANAGER.enqueue(ident, 'summary')
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with database.get_session(app_module.engine) as db:
+            if database.get_job(db, job_id).status == 'failed':
+                break
+        time.sleep(.01)
+    else:
+        pytest.fail('Summary job did not record its failure')
+    saved = client.get(f'/documents/{ident}', headers=headers).json()
+    assert saved['status'] == 'extracted'
+    assert saved['processing_error'] is None
+    assert saved['metadata']['fields']['contract_number']['value'] == '42'
+
+
+def test_automatic_summary_retries_current_fields_after_edit(monkeypatch):
+    headers = get_auth_header()
+    with database.get_session(app_module.engine) as db:
+        user = database.get_user(db, username=TEST_USERNAME)
+        doc = database.create_document(db, owner=user.id, template_id=None, filename='edited-summary.pdf')
+        database.create_parsed_document(db, doc.id, 'Договор № 42')
+        database.create_metadata(db, doc.id, {'contract_number': {'value': 'old'}})
+        ident = doc.id
+
+    def edit_during_summary(_text, fields):
+        with database.get_session(app_module.engine) as db:
+            database.update_metadata(db, ident, {'contract_number': {'value': '42'}})
+        return 'Сводка для старых полей.'
+
+    monkeypatch.setattr(app_module, 'summarize_document', edit_during_summary)
+    with pytest.raises(database.MetadataChangedError):
+        app_module.process_document_summary(ident)
+    assert client.get(f'/documents/{ident}', headers=headers).json()['metadata']['summary'] is None
+    monkeypatch.setattr(app_module, 'summarize_document', lambda _text, fields: fields['contract_number']['value'])
+    app_module.process_document_summary(ident)
+    assert client.get(f'/documents/{ident}', headers=headers).json()['metadata']['summary'] == '42'
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
 

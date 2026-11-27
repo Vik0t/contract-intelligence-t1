@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import pytest
 from threading import Event
 from datetime import datetime, timedelta
 
@@ -70,13 +71,14 @@ def test_job_manager_is_idempotent_and_completes(tmp_path):
         manager.shutdown()
 
 
-def test_restart_recovers_recent_running_job_and_commits_it(tmp_path):
+@pytest.mark.parametrize('kind', ['extract', 'summary'])
+def test_restart_recovers_recent_running_job_and_commits_it(tmp_path, kind):
     engine = database.get_engine(f"sqlite:///{tmp_path / 'restart.db'}")
     database.create_tables(engine)
     db = database.get_session(engine)
     user = database.create_user(db, username="restart", email="restart@example.com", password_hash="unused")
     doc = database.create_document(db, owner=user.id, template_id=None, filename="doc.pdf")
-    job, _ = database.create_job(db, document_id=doc.id, kind="extract", max_attempts=3)
+    job, _ = database.create_job(db, document_id=doc.id, kind=kind, max_attempts=3)
     job.status = "running"
     job.started_at = datetime.now() - timedelta(seconds=5)
     db.commit()

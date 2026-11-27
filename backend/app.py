@@ -474,24 +474,6 @@ def process_metadata_extraction(document_id: int):
                 reviewed_by=None,
             )
 
-            # Суммаризация — отдельный, не критичный для основного статуса шаг.
-            # Если HF API недоступен/лимитирован, документ всё равно должен
-            # остаться в статусе 'extracted' с полями, просто без summary.
-            try:
-                if settings.extraction_backend == 'rules':
-                    raise RuntimeError('Режим rules: автоматическая LLM-сводка отключена')
-                summary_text = summarize_document(parsed_doc.text, extracted_data)
-                database.save_insights(
-                    db,
-                    document_id=document_id,
-                    expected_fields=extracted_data,
-                    summary=summary_text
-                )
-                logger.info(f"Summary saved for document {document_id}")
-            except Exception as summary_exc:
-                logger.warning(
-                    f"Summary generation failed for document {document_id}: {summary_exc}"
-                )
             # A risk review needs the operator's explicit side and scope.
             # Do not guess a perspective or publish generic risks in the background.
 
@@ -533,6 +515,24 @@ def process_metadata_extraction(document_id: int):
         db.close()
 
 
+def process_document_summary(document_id: int) -> None:
+    """Generate optional insights without holding the extraction worker or a DB session."""
+    with database.get_session(engine) as db:
+        document = database.get_document(db, document_id)
+        parsed = database.get_parsed_document(db, document_id)
+        metadata = database.get_metadata(db, document_id)
+        if not document or not parsed or not metadata:
+            return
+        fields = deepcopy(metadata.fields)
+        text = parsed.text
+
+    summary = summarize_document(text, fields)
+    with database.get_session(engine) as db:
+        # A retry uses current fields if re-extraction or an operator edit won the race.
+        database.save_insights(db, document_id, fields, summary=summary)
+    logger.info("Summary saved for document %s", document_id)
+
+
 def run_processing_job(kind: str, document_id: int) -> None:
     if kind == 'parse':
         process_document_parsing(document_id)
@@ -544,6 +544,13 @@ def run_processing_job(kind: str, document_id: int) -> None:
                     JOB_MANAGER.enqueue(document_id, 'extract')
     elif kind == 'extract':
         process_metadata_extraction(document_id)
+        if settings.extraction_backend != 'rules':
+            with database.get_session(engine) as db:
+                document = database.get_document(db, document_id)
+                if document and document.processing_status == 'extracted':
+                    JOB_MANAGER.enqueue(document_id, 'summary')
+    elif kind == 'summary':
+        process_document_summary(document_id)
     else:
         raise ValueError(f'Unknown processing job kind: {kind}')
 
