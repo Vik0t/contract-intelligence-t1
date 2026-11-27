@@ -89,6 +89,30 @@ def source_identity(repo, *, review=False):
             'revision_label': 'uncommitted:' + tree, 'status': 'review_uncommitted'}
 
 
+def validate_acceptance_report(report, commit, images, runtime_hash, source_tree=None):
+    """An acceptance archive must reference the exact images that were tested."""
+    expected_images = dict(zip(('backend', 'frontend', 'db'), (image['Id'] for image in images)))
+    if report.get('kind') != 'A-10' or report.get('passed') is not True:
+        raise ValueError('A successful A-10 report is required')
+    if report.get('commit') != commit or report.get('runtime_source_sha256') != runtime_hash:
+        raise ValueError('A-10 source commit or runtime hash does not match the package')
+    if source_tree is not None and report.get('source_tree') != source_tree:
+        raise ValueError('A-10 source tree does not match the package')
+    if commit is None and source_tree is None:
+        raise ValueError('Review builds require an explicit source tree')
+    if report.get('images') != expected_images:
+        raise ValueError('A-10 image IDs do not match the package')
+    checks = report.get('checks', [])
+    required = {'register.success', 'login.success', 'upload.success', 'registry.success',
+                'card.success', 'delete.success', 'health.ready', 'health.unready', 'upload.nginx_413'}
+    if not checks or not all(check.get('passed') is True for check in checks):
+        raise ValueError('A-10 contains failed or missing checks')
+    if not required <= {check.get('case') for check in checks}:
+        raise ValueError('A-10 does not cover the required operations')
+    if not {400, 401, 403, 404, 413, 503} <= {check.get('status_code') for check in checks}:
+        raise ValueError('A-10 does not cover the required errors')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -121,6 +145,7 @@ def main():
     paths = sorted(p for folder in ('backend', 'src', 'scripts') for p in (repo / folder).rglob('*.py'))
     runtime_hash = sha256(b''.join(str(p.relative_to(repo)).encode() + b'\0' + p.read_bytes() for p in paths)).hexdigest()
     report = json.loads(args.validation_report.read_text())
+    validate_acceptance_report(report, identity['commit'], images, runtime_hash, identity['tree'])
     shutil.copy2(args.validation_report, bundle / 'a10-validation.json')
     validation = {'openapi_a10': 'a10-validation.json', 'real_model': 'a10-validation.json',
                   'note': 'A-10 passed on these exact source and image IDs; inference configuration is recorded in the report.'}
