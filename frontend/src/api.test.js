@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { request } from './api.js';
+import { friendlyError, request } from './api.js';
 
 test('form validation errors explain the invalid field instead of showing an object', async (context) => {
   context.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ detail: [
@@ -22,6 +22,19 @@ test('invalid JSON keeps the HTTP status for session recovery', async (context) 
 test('structured backend details do not become object text', async (context) => {
   context.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({detail:{reason:'invalid'}}), { status: 400, headers: { 'content-type': 'application/json' } }));
   await assert.rejects(() => request('/documents'), error => !error.message.includes('[object Object]'));
+});
+
+test('JSON upload limit errors preserve the existing operator message', async (context) => {
+  const detail = 'Файл слишком большой. Максимальный размер: 50 МБ';
+  context.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ detail }), {
+    status: 413, headers: { 'content-type': 'application/json' },
+  }));
+  await assert.rejects(() => request('/documents'), error => {
+    assert.equal(error.status, 413);
+    assert.equal(error.message, detail);
+    assert.equal(friendlyError(error), 'Файл больше 50 МБ. Выберите документ меньшего размера.');
+    return true;
+  });
 });
 
 test('offline and forbidden errors give the operator a useful next step', async () => {

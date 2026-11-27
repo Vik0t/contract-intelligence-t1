@@ -75,6 +75,12 @@ invalid request fields continue to use FastAPI's HTTP 422 validation response.
 The batch and folder operations can also reject a value with a string `detail`;
 their 422 schema describes both forms.
 
+The supplied nginx keeps `client_max_body_size 50m`. A request exceeding that
+limit returns HTTP 413, `Content-Type: application/json`, and
+`{"detail":"Файл слишком большой. Максимальный размер: 50 МБ"}`. The frontend
+continues to display «Файл больше 50 МБ. Выберите документ меньшего размера.».
+The nginx limit applies to the entire request body, including multipart overhead.
+
 ---
 
 ## 👤 Authentication
