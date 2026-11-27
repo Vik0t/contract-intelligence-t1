@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import importlib
 import logging
 
 from backend.config import Settings
@@ -32,6 +33,11 @@ class ExtractionService:
     @property
     def backend_name(self) -> str:
         return self.settings.extraction_backend
+
+    def prepare(self) -> None:
+        """Import the selected local runtime before accepting work; do not load weights."""
+        if self.settings.extraction_backend == 'local':
+            importlib.import_module('src.local_extraction')
 
     def _get_hf_space_backend(self) -> HFSpaceNuExtractBackend:
         if self._hf_space_backend is None:

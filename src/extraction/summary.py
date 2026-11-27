@@ -223,6 +223,8 @@ def _load_local_summary_model():
 def unload_local_summary_model() -> None:
     from src.extraction.runtime import release_device_memory
     with MODEL_LOCK:
+        if not _load_local_summary_model.cache_info().currsize:
+            return
         _load_local_summary_model.cache_clear()
         release_device_memory()
 

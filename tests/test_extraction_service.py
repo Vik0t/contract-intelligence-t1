@@ -14,6 +14,15 @@ def explicitly_enable_mocked_hosted_extraction(monkeypatch):
     monkeypatch.setenv("ML_ALLOW_EXTERNAL", "true")
 
 
+@pytest.mark.parametrize('backend', ['local', 'api', 'rules', 'huggingface-space'])
+def test_prepare_imports_only_selected_local_runtime(monkeypatch, backend):
+    imports = []
+    service = ExtractionService(Settings(_env_file=None, extraction_backend=backend))
+    monkeypatch.setattr(extraction_module.importlib, 'import_module', imports.append)
+    service.prepare()
+    assert imports == (['src.local_extraction'] if backend == 'local' else [])
+
+
 def test_extraction_service_uses_local_backend_by_default(monkeypatch) -> None:
     calls = []
 

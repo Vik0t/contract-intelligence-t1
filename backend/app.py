@@ -44,6 +44,7 @@ EXTRACTION_SERVICE = ExtractionService(settings)
 @asynccontextmanager
 async def lifespan(_app):
     """Recover durable jobs on startup and stop workers on shutdown."""
+    await run_in_threadpool(EXTRACTION_SERVICE.prepare)
     JOB_MANAGER.recover()
     with database.get_session(engine) as session:
         database.recover_risk_reviews(session)

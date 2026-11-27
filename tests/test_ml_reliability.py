@@ -11,6 +11,25 @@ from src.extraction.validation import validate_model_result, merge_extractions
 from src.extraction import risks, summary
 
 
+@pytest.mark.parametrize('loaded', [False, True])
+def test_summary_unload_releases_memory_only_for_a_loaded_model(monkeypatch, loaded):
+    from functools import lru_cache
+    from src.extraction import runtime
+
+    @lru_cache(maxsize=1)
+    def local_model():
+        return object()
+
+    if loaded:
+        local_model()
+    released = []
+    monkeypatch.setattr(summary, '_load_local_summary_model', local_model)
+    monkeypatch.setattr(runtime, 'release_device_memory', lambda: released.append(True))
+    summary.unload_local_summary_model()
+    assert local_model.cache_info().currsize == 0
+    assert released == ([True] if loaded else [])
+
+
 def test_empty_pages_cannot_be_analyzed_as_page_markers():
     document = DocumentIR(source_format="pdf", source_path="empty.pdf", page_count=1, pages=[PageIR(number=1)])
     with pytest.raises(ValueError, match="не содержит текста"):
