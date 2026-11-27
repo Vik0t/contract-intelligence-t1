@@ -32,4 +32,7 @@ tmp
 !evals/pmi-control-v1/*.docx
 !evals/pmi-control-v1/results/v1.0.0-http.json
 
+# Public deployment instructions.
+!deploy/server/README.txt
+
 .DS_Store
