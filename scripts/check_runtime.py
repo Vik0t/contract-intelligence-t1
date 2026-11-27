@@ -40,6 +40,21 @@ def verify_weights(folder: Path) -> None:
         raise RuntimeError(f"Веса модели неполные: {folder.name}; повторите model-download")
 
 
+def verify_cuda(torch) -> dict:
+    capability = torch.cuda.get_device_capability()
+    arch = f"sm_{capability[0]}{capability[1]}"
+    # CUDA cubins can support a newer minor architecture (for example sm_86 on
+    # sm_89). Verify execution instead of rejecting a compatible GPU by name.
+    try:
+        probe = torch.ones((2, 2), device='cuda')
+        (probe @ probe).sum().item()
+    except RuntimeError as exc:
+        raise RuntimeError(f'CUDA-операция не выполнилась на {arch}; проверьте сборку PyTorch и драйвер') from exc
+    return {"name": torch.cuda.get_device_name(),
+            "vram_gib": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1),
+            "architecture": arch}
+
+
 def check_runtime(*, require_gpu: bool = True, require_models: bool = True) -> dict:
     torch = None
     if require_gpu:
@@ -48,11 +63,7 @@ def check_runtime(*, require_gpu: bool = True, require_models: bool = True) -> d
             raise RuntimeError("CUDA GPU недоступна. Проверьте NVIDIA Container Toolkit и docker --gpus all")
     gpu = None
     if torch is not None and torch.cuda.is_available():
-        capability = torch.cuda.get_device_capability()
-        arch = f"sm_{capability[0]}{capability[1]}"
-        if require_gpu and arch not in torch.cuda.get_arch_list():
-            raise RuntimeError(f"PyTorch не содержит поддержку {arch}; установите CUDA-сборку для этой GPU")
-        gpu = {"name": torch.cuda.get_device_name(), "vram_gib": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1), "architecture": arch}
+        gpu = verify_cuda(torch)
     converter = shutil.which("soffice") or shutil.which("libreoffice")
     if not converter:
         raise RuntimeError("LibreOffice не установлен: нельзя сверить страницы DOCX с оригиналом")

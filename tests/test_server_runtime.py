@@ -1,9 +1,10 @@
 import json
 from itertools import product
+from types import SimpleNamespace
 
 import pytest
 
-from scripts.check_runtime import model_specs, verify_weights
+from scripts.check_runtime import model_specs, verify_cuda, verify_weights
 from scripts.serve import runtime_requirements
 
 
@@ -78,3 +79,31 @@ def test_rules_profile_does_not_load_unused_local_models(monkeypatch):
     monkeypatch.setenv('ML_ALLOW_EXTERNAL', 'false')
     assert runtime_requirements() == {'require_gpu': False, 'require_models': False}
     assert model_specs() == []
+
+
+def fake_cuda_runtime(ones):
+    return SimpleNamespace(ones=ones, cuda=SimpleNamespace(
+        get_device_capability=lambda: (8, 9), get_arch_list=lambda: ['sm_86'],
+        get_device_name=lambda: 'Synthetic CUDA GPU',
+        get_device_properties=lambda _: SimpleNamespace(total_memory=12 * 2**30),
+    ))
+
+
+def test_cuda_probe_accepts_a_compatible_minor_architecture():
+    class Tensor:
+        def __matmul__(self, other):
+            return self
+        def sum(self):
+            return self
+        def item(self):
+            return 8.0
+    gpu = verify_cuda(fake_cuda_runtime(lambda *a, **kw: Tensor()))
+    assert gpu['architecture'] == 'sm_89'
+    assert gpu['vram_gib'] == 12
+
+
+def test_cuda_probe_rejects_a_real_kernel_failure():
+    def unavailable(*args, **kwargs):
+        raise RuntimeError('no kernel image is available')
+    with pytest.raises(RuntimeError, match='CUDA-операция'):
+        verify_cuda(fake_cuda_runtime(unavailable))
