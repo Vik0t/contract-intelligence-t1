@@ -27,10 +27,6 @@ services:
       HF_HOME: /models
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      ML_ALLOW_EXTERNAL: "false"
-      EXTRACTION_BACKEND: local
-      SUMMARY_BACKEND: local
-      RISK_BACKEND: local
       JOB_WORKER_COUNT: "1"
       DOCX_USE_RENDERED_PAGES: "true"
     gpus: all
@@ -80,10 +76,6 @@ services:
       HF_HOME: /models
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      ML_ALLOW_EXTERNAL: "false"
-      EXTRACTION_BACKEND: local
-      SUMMARY_BACKEND: local
-      RISK_BACKEND: local
       DOCX_USE_RENDERED_PAGES: "true"
     gpus: all
     networks: [private]

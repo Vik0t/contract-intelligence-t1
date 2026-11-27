@@ -21,7 +21,7 @@ git clone --branch v1.0.0 https://github.com/Vik0t/contract-intelligence-t1.git
 cd contract-intelligence-t1
 git describe --tags --exact-match
 uv sync --frozen
-cp .env.rules.example .env.rules
+# Создайте .env.rules с параметрами из docs/DELIVERY_PROFILE.md.
 ```
 
 В `.env.rules` замените `POSTGRES_PASSWORD` на случайный hex-пароль. Для уже существующей БД используйте её действующий пароль. Отдельное имя проекта ниже создаёт отдельные volumes и не использует рабочую базу приложения. Порт по умолчанию — 8080; при необходимости измените `HTTP_PORT` и адреса в командах.

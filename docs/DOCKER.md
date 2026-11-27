@@ -9,14 +9,15 @@ containers) либо Docker Engine с Compose 2.30+ (Linux). Образы соб
 ## Запуск из исходников
 
 ```bash
-cp .env.docker.example .env.docker
+# Создайте .env.docker с настройками режима правил из DELIVERY_PROFILE.md.
+# Укажите DOCKER_ENV_FILE=.env.docker.
 openssl rand -hex 24
 # Вставьте сгенерированную строку в POSTGRES_PASSWORD файла .env.docker.
 docker compose --env-file .env.docker -f compose.portable.yaml up -d --build --wait
 ```
 
-В PowerShell скопируйте файл командой `Copy-Item .env.docker.example .env.docker`
-и задайте длинный случайный пароль из ASCII-букв и цифр в редакторе.
+В PowerShell создайте `.env.docker` в редакторе с теми же параметрами
+и задайте длинный случайный пароль из ASCII-букв и цифр.
 Не меняйте пароль при повторном запуске существующего volume PostgreSQL.
 
 Откройте <http://localhost:8080> и зарегистрируйте пользователя.
@@ -30,7 +31,25 @@ docker compose --env-file .env.docker -f compose.portable.yaml up -d --build --w
 в этом профиле недоступны. Это тот же профиль, который описан в
 [DELIVERY_PROFILE.md](DELIVERY_PROFILE.md).
 
-## Полный анализ через API
+## Локальное извлечение и работа через API
+
+В [README](../README.md#запуск) приведены два готовых варианта запуска из исходников:
+
+| Назначение | Окружение | Compose | Ресурсы |
+|---|---|---|---|
+| Разработка через API на всех стадиях | `.env.api` | `compose.yaml` + `compose.api.yaml` | CPU, доступ к API; без GPU и весов |
+| Локальное извлечение NuExtract3, Qwen API для сводки и рисков | `.env.server` | `compose.yaml` + `compose.local-extraction.yaml` | NVIDIA GPU, веса NuExtract3, доступ к API |
+
+Имена моделей задаются в окружении. Для локального извлечения используется CUDA-образ
+`Dockerfile`; `compose.api.yaml` выбирает CPU-вариант этого Dockerfile для
+разработки. `Dockerfile.portable` — отдельный облегчённый вариант для правил
+и API, описанный ниже; локальный NuExtract3 в нём не запускается.
+
+## Извлечение через API
+
+Следующие настройки выбирают API и для извлечения полей. Каждый backend
+задаётся в окружении независимо от остальных; общий код не привязан к модели
+из примера. Образ и ресурсы Compose выбираются под эти настройки.
 
 В том же `.env.docker` установите:
 
@@ -66,12 +85,13 @@ docker image save -o contract-intelligence-images.tar \
   contract-intelligence-frontend:portable postgres:16-alpine
 ```
 
-Перенесите архив, `compose.portable.yaml` и `.env.docker.example` на целевой
-компьютер. Исходники для запуска готовых образов не нужны:
+Перенесите архив и `compose.portable.yaml` на целевой компьютер.
+Создайте там `.env.docker` с параметрами режима правил или API. Исходники для запуска готовых образов не нужны:
 
 ```bash
 docker image load -i contract-intelligence-images.tar
-cp .env.docker.example .env.docker
+# Создайте .env.docker с настройками режима правил из DELIVERY_PROFILE.md.
+# Укажите DOCKER_ENV_FILE=.env.docker.
 # Задайте новый POSTGRES_PASSWORD и, при необходимости, настройки API.
 docker compose --env-file .env.docker -f compose.portable.yaml up -d --no-build --pull never --wait
 ```

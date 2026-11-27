@@ -18,7 +18,7 @@ Docker Engine 23+ с BuildKit и Compose с поддержкой `gpus` (Compose
 На сервере нужен совместимый с CUDA 12.8 драйвер NVIDIA; установка драйвера не входит в образ.
 
 ```bash
-cp .env.server.example .env.server
+# Создайте .env.server с параметрами полностью локального режима из README.
 openssl rand -hex 24
 # Запишите полученный пароль в POSTGRES_PASSWORD файла .env.server.
 docker compose --env-file .env.server build
@@ -50,7 +50,7 @@ chat-модель не является прямой заменой её extract
 выполните `pg_dump` и сохраните volume документов; одно без другого не восстанавливает продукт.
 `.env.server` и загруженные документы исключены из Git и Docker build context.
 
-В `.env.server.example` закреплены ревизии NuExtract3 `c99dc8f…` и Qwen3-8B
+Для воспроизводимого запуска укажите ревизии NuExtract3 `c99dc8f…` и Qwen3-8B
 `b968826d…`, соответствующие проверенным конфигурациям. После загрузки команда
 печатает `resolved_revision`. При обновлении модели внесите её фактический SHA
 в `CONTRACT_MODEL_REVISION` или `SUMMARY_LOCAL_MODEL_REVISION` и повторите
@@ -85,16 +85,25 @@ curl http://127.0.0.1:8080/api/health/ready
 обработки. Для нескольких GPU/процессов нужна отдельная распределённая очередь.
 Документы для полноценного benchmark и доступ к серверу НГУ в репозитории отсутствуют.
 
+## Локальное извлечение NuExtract3 и Qwen через API
+
+Задайте параметры локального извлечения в `.env.server` и используйте сочетание
+`compose.yaml` + `compose.local-extraction.yaml`. Извлечение выполняется локально
+на NVIDIA GPU; сводка и риски — через настроенный API. Точные команды
+с отдельным именем проекта приведены в [README](../README.md#запуск).
+Это отдельный вариант от полностью локального профиля выше.
+
 ## Вариант с DeepCode API без GPU
 
-Этот профиль явно разрешает отправку текста договора в настроенный DeepCode.
-Он не используется локальным профилем автоматически.
+Для разработки все три стадии — извлечение, сводка и риски — выполняются
+через API. Настройки задаются в `.env.api`; Compose не подменяет выбор модели.
+Текст договора отправляется в настроенный сервис.
 
 ```bash
-cp .env.api.example .env.api
+# Создайте .env.api с параметрами API-режима из README.
 # Заполните POSTGRES_PASSWORD, OPENAI_BASE_URL, OPENAI_API_KEY.
 # Укажите точный alias модели во всех трёх *_MODEL* переменных.
-docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml build
+docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml build backend frontend
 docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml \
   --profile validation run --rm ml-check
 docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml up -d
@@ -104,7 +113,7 @@ docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml up -d
 Образ собирается с CPU PyTorch, NVIDIA GPU и загрузка весов не требуются.
 Для `!reset`/`!override` в override-файле нужна Compose 2.30+.
 
-В `.env.api.example` указан подтверждённый ID `qwen3.8-flash-next`.
+В командах README используется ID `qwen3.8-flash-next`; укажите доступный в вашем API ID.
 DeepCode различает регистр: прежнее `Qwen3.8-Flash-Next` давало `400 Model not found`.
 Клиент сопоставляет имя с `/models` без учёта регистра и отправляет точный ID
 провайдера; он не подменяет запрос другой моделью. Benchmark проверяет API
@@ -186,10 +195,11 @@ CREATE DATABASE contract_intelligence;
 
 ### 3. Configure Database Connection
 
-For local development, use the SQLite configuration from `.env.example`:
+For local development, create `.env` with a SQLite connection:
 
-```bash
-cp .env.example .env
+```dotenv
+DATABASE_URL=sqlite:///documents.db
+DOCUMENT_STORAGE_DIR=uploads
 ```
 
 This uses `sqlite:///documents.db` and does not require PostgreSQL. For a
@@ -236,7 +246,7 @@ curl http://localhost:8000/ping
 
 ## Production checklist
 
-- Copy `.env.example` to `.env` and set `DATABASE_URL`, `DOCUMENT_STORAGE_DIR`, and exact `CORS_ORIGINS`.
+- Create `.env` and set `DATABASE_URL`, `DOCUMENT_STORAGE_DIR`, and exact `CORS_ORIGINS`.
 - Keep uploaded files in private durable storage; do not expose `DOCUMENT_STORAGE_DIR` through the frontend web server.
 - Run one GPU worker per GPU. The built-in job runner is durable for a single local process; use Redis/RQ/Celery before scaling to multiple backend processes.
 - Windows uses the explicit PyTorch CUDA 13.0 index configured in `pyproject.toml`; Apple Silicon macOS uses the MLX profile and CPU/Metal-compatible PyTorch wheels.

@@ -27,7 +27,7 @@ backend (FastAPI :8000)
       ├── файлы → /data/uploads
       └── JobManager
             ├── чтение документов: PyMuPDF, LibreOffice, Tesseract
-            └── извлечение, сводка, риски: локальные модели / DeepCode
+            └── извлечение, сводка, риски: backend каждой стадии из окружения
 ```
 
 Документ обрабатывается в фоне. Оператор проверяет извлечённые поля по выделенным фрагментам, вносит исправления и подтверждает результат. Данные доступны для копирования и скачивания в JSON.
@@ -54,10 +54,11 @@ backend (FastAPI :8000)
 |---|---|---|---|
 | Правила, `compose.yaml` + `compose.rules.yaml` | Четыре атрибута по контекстным правилам | Не используются | CPU, без весов моделей и внешних API. |
 | Локальный сервер, `compose.yaml` | `numind/NuExtract3` | `Qwen/Qwen3-8B` | В backend на NVIDIA GPU; доступ backend в интернет закрыт. |
-| DeepCode, `compose.yaml` + `compose.api.yaml` | Настраиваемая модель, в примере `qwen3.8-flash-next` | Та же модель через API | Текст отправляется в настроенный внешний API; GPU не требуется. |
+| Локальное извлечение, `compose.yaml` + `compose.local-extraction.yaml` | `numind/NuExtract3` на NVIDIA GPU | Qwen через API | Веса NuExtract3 на сервере; API нужен для сводки и рисков. |
+| Разработка через API, `compose.yaml` + `compose.api.yaml` | Модель из `EXTRACTION_API_MODEL` через API | Модели из `SUMMARY_MODEL_NAME` и `RISK_MODEL_NAME` через API | CPU-образ; GPU и загрузка весов не нужны. |
 | Локальная разработка на Apple Silicon | `numind/NuExtract3-mlx-8bits` через MLX | Transformers | На компьютере разработчика. |
 
-Режим задаётся конфигурацией окружения. Для DeepCode используется файл `.env.api` и дополнительный Compose-файл `compose.api.yaml`.
+Backend каждой стадии задаётся отдельно: `EXTRACTION_BACKEND`, `SUMMARY_BACKEND`, `RISK_BACKEND`. Для разработки в `.env.api` выбирается API для всех трёх стадий. Для локального извлечения в `.env.server` задаются NuExtract3 и Qwen через API для сводки и рисков. Compose-файлы задают CPU/GPU и сеть; модели выбираются окружением.
 
 ## Состав системы
 
@@ -86,7 +87,6 @@ backend (FastAPI :8000)
 Для локального сервера создайте `.env.server` в корне репозитория:
 
 ```bash
-cp .env.server.example .env.server
 openssl rand -hex 24
 ```
 
@@ -101,7 +101,9 @@ RISK_BACKEND=local
 ML_ALLOW_EXTERNAL=false
 ```
 
-Значения по умолчанию приведены для `.env.server.example` и `.env.api.example`.
+Параметры для каждого режима приведены ниже. Для всех Docker-режимов задайте
+`POSTGRES_PASSWORD`, `BIND_ADDRESS`, `HTTP_PORT` и `CORS_ORIGINS` в выбранном
+файле настроек. Пароль PostgreSQL генерируется командой выше.
 
 | Переменная | Обязательная | По умолчанию | Описание |
 |---|---|---|---|
@@ -113,16 +115,17 @@ ML_ALLOW_EXTERNAL=false
 | `MAX_PDF_PAGES` | нет | `200` | Максимальное число страниц загружаемого PDF. |
 | `JOB_WORKER_COUNT` | нет | `1` | Число фоновых потоков; локальный Compose фиксирует один. |
 | `ML_ALLOW_EXTERNAL` | да для API | `false` / `true` | Разрешение внешнего inference; согласовано с выбранным профилем. |
-| `EXTRACTION_BACKEND`, `SUMMARY_BACKEND`, `RISK_BACKEND` | нет | `local` / `api` | Обработчики трёх этапов; Compose устанавливает значения профиля. |
+| `EXTRACTION_BACKEND`, `SUMMARY_BACKEND`, `RISK_BACKEND` | нет | `local` / `api` | Обработчики трёх этапов; выбираются в файле окружения. |
 | `CONTRACT_MODEL_ID` | нет | `numind/NuExtract3` | Локальная модель извлечения. |
 | `CONTRACT_MODEL_QUANTIZATION` | нет | `bf16` | Режим CUDA-модели; `8bit` доступен как альтернативный режим. |
 | `SUMMARY_LOCAL_MODEL_NAME` | нет | `Qwen/Qwen3-8B` | Локальная модель сводки и рисков. |
 | `ML_KEEP_MODELS_LOADED` | нет | `false` | Удерживать модели в GPU-памяти; при `false` они выгружаются между этапами. |
-| `CONTRACT_MODEL_REVISION`, `SUMMARY_LOCAL_MODEL_REVISION` | нет | SHA в `.env.server.example` | Закреплённые ревизии моделей для воспроизводимого развёртывания. |
-| `OPENAI_BASE_URL`, `OPENAI_API_KEY` | да для API | — | Адрес и ключ DeepCode; задаются в `.env.api`. |
+| `CONTRACT_MODEL_REVISION`, `SUMMARY_LOCAL_MODEL_REVISION` | нет | Задаётся явно | Закреплённые ревизии моделей для воспроизводимого развёртывания. |
+| `OPENAI_BASE_URL`, `OPENAI_API_KEY` | да для API | — | Адрес и ключ API; задаются в env-файле выбранного режима. |
 | `ML_API_TRUST_ENV` | нет | `false` | Использовать proxy и CA-настройки окружения при обращении к API; включите, если они нужны вашей сети. |
 | `ML_API_CONNECT_RETRIES` | нет | `2` | Число повторов установки соединения, от 0 до 3; завершённые запросы не повторяются. |
-| `EXTRACTION_API_MODEL`, `SUMMARY_MODEL_NAME`, `RISK_MODEL_NAME` | да для API | `qwen3.8-flash-next` | Идентификаторы моделей в API-профиле. |
+| `SUMMARY_MODEL_NAME`, `RISK_MODEL_NAME` | да для DeepCode | `qwen3.8-flash-next` | Модели API для сводки и рисков; режим извлечения задаётся отдельно. |
+| `EXTRACTION_API_MODEL` | да при `EXTRACTION_BACKEND=api` | — | Модель API-извлечения, выбранная в окружении. |
 
 Если увеличиваете размер загрузки, измените также `client_max_body_size` в `deploy/nginx.conf`. Для фотографий действуют отдельные ограничения: ширина и высота не меньше 320 пикселей, площадь не больше 40 мегапикселей.
 
@@ -132,7 +135,8 @@ ML_ALLOW_EXTERNAL=false
 образ (macOS / Windows / Linux, amd64 / arm64):
 
 ```bash
-cp .env.docker.example .env.docker
+# Создайте .env.docker с настройками режима правил из docs/DELIVERY_PROFILE.md.
+# В этом файле используйте DOCKER_ENV_FILE=.env.docker.
 # Задайте POSTGRES_PASSWORD в .env.docker, например через openssl rand -hex 24.
 docker compose --env-file .env.docker -f compose.portable.yaml up -d --build --wait
 ```
@@ -141,17 +145,17 @@ docker compose --env-file .env.docker -f compose.portable.yaml up -d --build --w
 полный анализ подключается через настроенный API. [Инструкция Docker](docs/DOCKER.md)
 включает настройки, перенос готовых образов без сборки и сохранение данных.
 
-Профиль поставки четырёх атрибутов [pmi-rules-v1](docs/DELIVERY_PROFILE.md): CPU, нативный DOCX, текстовый PDF, PostgreSQL, автоматическое извлечение, OCR и внешние вызовы выключены.
+Дополнительный режим извлечения четырёх атрибутов по правилам [pmi-rules-v1](docs/DELIVERY_PROFILE.md): CPU, нативный DOCX, текстовый PDF, PostgreSQL, автоматическое извлечение, OCR и внешние вызовы выключены.
 
 ```bash
-cp .env.rules.example .env.rules
+# Создайте .env.rules с настройками из docs/DELIVERY_PROFILE.md.
 # Задайте сгенерированный POSTGRES_PASSWORD в .env.rules.
 docker compose --env-file .env.rules -f compose.yaml -f compose.rules.yaml build backend frontend
 docker compose --env-file .env.rules -f compose.yaml -f compose.rules.yaml up -d --wait
 curl --fail http://127.0.0.1:8080/api/health/ready
 ```
 
-Релиз **`v1.0.0`** включает [замороженный контрольный набор с эталонами](evals/pmi-control-v1/README.md): 36 синтетических договоров, 24 development / 12 holdout, каждый в PDF и DOCX. [Команды воспроизведения](docs/RELEASE_v1.0.0.md) и [правила подсчёта четырёх приёмочных метрик](docs/ACCEPTANCE.md) входят в репозиторий.
+Релиз **`1.0.0`** включает [замороженный контрольный набор с эталонами](evals/pmi-control-v1/README.md): 36 синтетических договоров, 24 development / 12 holdout, каждый в PDF и DOCX. [Команды воспроизведения](docs/RELEASE_v1.0.0.md) и [правила подсчёта четырёх метрик](docs/ACCEPTANCE.md) входят в репозиторий.
 
 Локальный сервер с NVIDIA GPU:
 
@@ -170,19 +174,87 @@ curl --fail http://127.0.0.1:8080/api/health/ready
 
 Откройте `http://127.0.0.1:8080` и зарегистрируйте учётную запись.
 
-API-профиль DeepCode:
+#### Разработка через API без GPU
 
-```bash
-cp .env.api.example .env.api
-# Заполните POSTGRES_PASSWORD, OPENAI_BASE_URL и OPENAI_API_KEY в .env.api.
-# SERVER_ENV_FILE=.env.api уже указан в шаблоне.
-docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml build
-docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml \
-  --profile validation run --rm ml-check
-docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml up -d
+Создайте `.env.api`, задайте общие параметры Docker и добавьте:
+
+```dotenv
+SERVER_ENV_FILE=.env.api
+COMPOSE_PROJECT_NAME=contract-intelligence-api-dev
+DELIVERY_PROFILE=custom
+EXTRACTION_BACKEND=api
+SUMMARY_BACKEND=api
+RISK_BACKEND=api
+ML_ALLOW_EXTERNAL=true
+ML_HF_FALLBACK_ENABLED=false
+HF_EXTRACTION_FALLBACK_ENABLED=false
+DEEPCODE_ENABLE_THINKING=false
+EXTRACTION_API_PROVIDER=deepcode
+SUMMARY_PROVIDER=deepcode
+RISK_PROVIDER=deepcode
+OPENAI_BASE_URL=https://deepcode.ci.nsu.ru/api/v1
+OPENAI_API_KEY=ваш_ключ
+EXTRACTION_API_MODEL=qwen3.8-flash-next
+SUMMARY_MODEL_NAME=qwen3.8-flash-next
+RISK_MODEL_NAME=qwen3.8-flash-next
+AUTO_EXTRACT_UPLOADS=true
+ALLOW_OCR_UPLOADS=true
+DOCX_USE_RENDERED_PAGES=true
 ```
 
-Имя модели задаётся по ID из DeepCode `/models`. Интерфейс доступен на `http://127.0.0.1:8080`.
+Адрес, ключ, провайдер и ID моделей должны соответствовать используемому API.
+
+```bash
+docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml build backend frontend
+docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml up -d --wait
+```
+
+Все три стадии работают через API. NVIDIA GPU, `model-download` и локальные
+веса не нужны. Отдельная проверка моделей при необходимости выполняется так
+(использует API на синтетических договорах):
+
+```bash
+docker compose --env-file .env.api -f compose.yaml -f compose.api.yaml \
+  --profile validation run --rm ml-check
+```
+
+#### Локальное извлечение NuExtract3, сводка и риски через Qwen API
+
+Создайте `.env.server` с общими параметрами Docker и настройками API из
+предыдущего раздела. Замените следующие значения:
+
+```dotenv
+SERVER_ENV_FILE=.env.server
+COMPOSE_PROJECT_NAME=contract-intelligence-local-extraction
+EXTRACTION_BACKEND=local
+CONTRACT_EXTRACTION_BACKEND=huggingface
+CONTRACT_MODEL_ID=numind/NuExtract3
+CONTRACT_MODEL_REVISION=c99dc8f5641b866aa0192b6ea78f84bf9f3535f1
+CONTRACT_MODEL_QUANTIZATION=bf16
+```
+
+Сводка и риски сохраняют `SUMMARY_BACKEND=api` и `RISK_BACKEND=api`.
+
+```bash
+docker compose -p contract-intelligence-local-extraction --env-file .env.server \
+  -f compose.yaml -f compose.local-extraction.yaml build backend frontend
+docker compose -p contract-intelligence-local-extraction --env-file .env.server \
+  -f compose.yaml -f compose.local-extraction.yaml --profile setup run --rm model-download
+docker compose -p contract-intelligence-local-extraction --env-file .env.server \
+  -f compose.yaml -f compose.local-extraction.yaml --profile validation run --rm ml-check
+docker compose -p contract-intelligence-local-extraction --env-file .env.server \
+  -f compose.yaml -f compose.local-extraction.yaml up -d --wait
+```
+
+Нужны NVIDIA GPU и NVIDIA Container Toolkit. Веса NuExtract3 загружаются один
+раз в volume `models`; локальные веса Qwen в этом режиме не нужны.
+Поставляемый архив содержит свой `compose.yaml` и инструкцию `README.txt`;
+приведённые выше команды относятся к запуску из исходников.
+
+Интерфейс обоих режимов: `http://127.0.0.1:8080`. Для одновременного запуска
+задайте разные `HTTP_PORT`. У режимов разные имена Compose-проекта и свои БД,
+файлы и пароли. При дальнейших командах для локального извлечения сохраняйте
+`-p contract-intelligence-local-extraction` и оба `-f`, для API — `.env.api` и оба `-f`.
 
 ### Запуск отдельных компонентов
 
@@ -199,7 +271,7 @@ Compose запускает зависимости автоматически.
 Для разработки без Docker в корне репозитория:
 
 ```bash
-cp .env.example .env
+# Создайте .env с DATABASE_URL=sqlite:///documents.db и DOCUMENT_STORAGE_DIR=uploads.
 uv sync
 uv run uvicorn backend.app:app --reload --host 127.0.0.1 --port 8000
 ```

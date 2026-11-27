@@ -1,0 +1,8 @@
+# NVIDIA GPU from compose.yaml; allow API calls for the stages selected in .env.server.
+services:
+  backend:
+    networks: !override [private, inference]
+  ml-check:
+    networks: !override [private, inference]
+networks:
+  inference:

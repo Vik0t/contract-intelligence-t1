@@ -22,7 +22,25 @@ LibreOffice используется при показе оригинала DOCX
 
 ## Запуск
 
-Создайте `.env.rules` из `.env.rules.example` и задайте новый пароль PostgreSQL. Для существующей БД сохраните её действующие реквизиты.
+Создайте `.env.rules` с настройками ниже и задайте новый пароль PostgreSQL. Для существующей БД сохраните её действующие реквизиты.
+
+```dotenv
+DELIVERY_PROFILE=pmi-rules-v1
+SERVER_ENV_FILE=.env.rules
+POSTGRES_PASSWORD=сгенерированный_hex_пароль
+EXTRACTION_BACKEND=rules
+SUMMARY_BACKEND=local
+RISK_BACKEND=local
+ML_ALLOW_EXTERNAL=false
+AUTO_EXTRACT_UPLOADS=true
+ALLOW_OCR_UPLOADS=false
+DOCX_USE_RENDERED_PAGES=false
+MAX_UPLOAD_SIZE_MB=50
+MAX_PDF_PAGES=200
+```
+
+Для переносимого образа сохраните эти параметры в `.env.docker` и добавьте
+`DOCKER_ENV_FILE=.env.docker`.
 
 ```bash
 docker compose --env-file .env.rules -f compose.yaml -f compose.rules.yaml config --quiet
